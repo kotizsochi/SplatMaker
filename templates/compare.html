@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><title>SplatMaker - Comparison</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#080810;color:#e0e0e0;min-height:100vh}
+.app{max-width:1200px;margin:0 auto;padding:30px 20px}
+h1{font-size:24px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:20px;text-align:center}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.compare-card{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:16px;padding:20px}
+.compare-card h3{font-size:14px;color:#a78bfa;margin-bottom:12px}
+.stat-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #ffffff06;font-size:13px}
+.stat-label{color:#888}
+.stat-value{font-weight:600;color:#e0e0e0}
+.stat-value.better{color:#34d399}
+.stat-value.worse{color:#f87171}
+.select-area{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:16px;padding:20px;margin-bottom:20px}
+select{width:100%;padding:10px;background:#0e0e1a;border:1px solid #2a2a3e;border-radius:8px;color:#fff;font-size:13px;font-family:inherit}
+.btn{padding:10px 20px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;margin-top:10px}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(99,102,241,0.3)}
+.viewers{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}
+.viewer-frame{background:#12121e;border:1px solid #2a2a3e;border-radius:12px;overflow:hidden;aspect-ratio:1}
+.viewer-frame iframe{width:100%;height:100%;border:none}
+.back-link{display:inline-block;color:#a78bfa;text-decoration:none;font-size:13px;margin-bottom:16px}
+.back-link:hover{color:#c4b5fd}
+</style>
+</head>
+<body>
+<div class="app">
+<a href="/" class="back-link">< SplatMaker</a>
+<h1>Сравнение качества</h1>
+
+<div class="select-area">
+  <div class="compare-grid">
+    <div><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Проект A</label>
+    <select id="selectA"><option value="">Выберите проект</option></select></div>
+    <div><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Проект B</label>
+    <select id="selectB"><option value="">Выберите проект</option></select></div>
+  </div>
+  <button class="btn" onclick="compare()" style="width:100%">Сравнить</button>
+</div>
+
+<div class="viewers" id="viewersArea" style="display:none">
+  <div class="viewer-frame"><iframe id="viewerA"></iframe></div>
+  <div class="viewer-frame"><iframe id="viewerB"></iframe></div>
+</div>
+
+<div class="compare-grid" id="statsArea" style="display:none">
+  <div class="compare-card" id="statsA"><h3>Проект A</h3></div>
+  <div class="compare-card" id="statsB"><h3>Проект B</h3></div>
+</div>
+</div>
+
+<script>
+async function loadJobs(){
+  const r = await fetch('/api/jobs');
+  const jobs = await r.json();
+  const done = jobs.filter(j => j.status === 'done');
+  const selA = document.getElementById('selectA');
+  const selB = document.getElementById('selectB');
+  done.forEach(j => {
+    const opt = `<option value="${j.id}">${j.name} (${j.quality})</option>`;
+    selA.innerHTML += opt;
+    selB.innerHTML += opt;
+  });
+}
+loadJobs();
+
+async function compare(){
+  const a = document.getElementById('selectA').value;
+  const b = document.getElementById('selectB').value;
+  if(!a || !b){alert('Выберите оба проекта');return}
+
+  // Show viewers
+  document.getElementById('viewersArea').style.display = 'grid';
+  document.getElementById('viewerA').src = '/viewer/' + a;
+  document.getElementById('viewerB').src = '/viewer/' + b;
+
+  // Get comparison data
+  const r = await fetch('/api/compare-data', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({job_a:a, job_b:b})});
+  const d = await r.json();
+
+  document.getElementById('statsArea').style.display = 'grid';
+  renderStats('statsA', d.a, d.b);
+  renderStats('statsB', d.b, d.a);
+}
+
+function renderStats(elemId, data, other){
+  const el = document.getElementById(elemId);
+  if(data.error){el.innerHTML = `<h3>${data.error}</h3>`;return}
+
+  const moreIsBetter = (a, b) => a > b ? 'better' : a < b ? 'worse' : '';
+  const lessIsBetter = (a, b) => a < b ? 'better' : a > b ? 'worse' : '';
+
+  el.innerHTML = `<h3>${data.name}</h3>
+    <div class="stat-row"><span class="stat-label">Качество</span><span class="stat-value">${data.quality}</span></div>
+    <div class="stat-row"><span class="stat-label">Изображения</span><span class="stat-value ${moreIsBetter(data.total_images, other.total_images)}">${data.total_images}</span></div>
+    <div class="stat-row"><span class="stat-label">Вершины (splats)</span><span class="stat-value ${moreIsBetter(data.vertices, other.vertices)}">${(data.vertices||0).toLocaleString()}</span></div>
+    <div class="stat-row"><span class="stat-label">PLY размер</span><span class="stat-value">${data.ply_size_mb} MB</span></div>
+    <div class="stat-row"><span class="stat-label">Время обработки</span><span class="stat-value ${lessIsBetter(data.duration, other.duration)}">${Math.round(data.duration)}s</span></div>`;
+}
+</script>
+</body>
+</html>

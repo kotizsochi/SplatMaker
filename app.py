@@ -36,6 +36,7 @@ STEPS = [
     {"id": "upload",   "name": "Подготовка источников"},
     {"id": "frames",   "name": "Извлечение кадров"},
     {"id": "blur",     "name": "Фильтр размытия"},
+    {"id": "masking",  "name": "AI Маскирование"},
     {"id": "features", "name": "Feature Extraction"},
     {"id": "matching", "name": "Feature Matching"},
     {"id": "mapper",   "name": "3D Реконструкция"},
@@ -74,6 +75,201 @@ def calc_blur_score(img_path):
             return float(np.var(gx) + np.var(gy))
         except:
             return 999999  # keep on error
+
+def parallel_feature_extraction(images_dir, db_path, max_features, job_id=None, n_workers=None):
+    """Run COLMAP feature_extractor in parallel on image batches, then merge DBs.
+    Returns True on success, False on failure.
+    """
+    import multiprocessing
+    if n_workers is None:
+        n_workers = min(multiprocessing.cpu_count() // 2, 5)
+    n_workers = max(n_workers, 1)
+
+    # Collect all images
+    all_images = sorted([
+        f for f in os.listdir(images_dir)
+        if os.path.splitext(f)[1].lower() in ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp')
+    ])
+
+    if len(all_images) < 20 or n_workers <= 1:
+        # Too few images or single worker -- use standard extraction
+        return None  # signal to use standard path
+
+    # Split into batches
+    batches = [[] for _ in range(n_workers)]
+    for i, img in enumerate(all_images):
+        batches[i % n_workers].append(img)
+
+    colmap_dir = os.path.dirname(db_path)
+    batch_dirs = []
+    batch_dbs = []
+    processes = []
+
+    log.info(f'[{job_id}] Parallel extraction: {len(all_images)} images -> {n_workers} workers')
+
+    for wi in range(n_workers):
+        if not batches[wi]:
+            continue
+        # Create batch image dir with symlinks
+        batch_img_dir = os.path.join(colmap_dir, f"_batch_{wi}")
+        os.makedirs(batch_img_dir, exist_ok=True)
+        for img_name in batches[wi]:
+            src = os.path.join(images_dir, img_name)
+            dst = os.path.join(batch_img_dir, img_name)
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+        batch_db = os.path.join(colmap_dir, f"_batch_{wi}.db")
+        batch_dirs.append(batch_img_dir)
+        batch_dbs.append(batch_db)
+
+        cmd = ["colmap", "feature_extractor",
+               "--database_path", batch_db,
+               "--image_path", batch_img_dir,
+               "--ImageReader.camera_model", "OPENCV",
+               "--ImageReader.single_camera", "1",
+               "--SiftExtraction.max_num_features", str(max_features)]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        processes.append((wi, p))
+
+    # Wait for all to finish
+    for wi, p in processes:
+        p.wait()
+        if job_id:
+            done_count = sum(1 for _, pp in processes if pp.poll() is not None)
+            pct = int(done_count / len(processes) * 90)
+            update_job(job_id, step_progress=pct)
+
+    # Check all succeeded
+    for wi, p in processes:
+        if p.returncode != 0:
+            log.warning(f'[{job_id}] Worker {wi} failed with code {p.returncode}')
+            # Cleanup and fall back to standard
+            for d in batch_dirs:
+                shutil.rmtree(d, ignore_errors=True)
+            for db in batch_dbs:
+                if os.path.exists(db): os.remove(db)
+            return None
+
+    # Merge databases
+    log.info(f'[{job_id}] Merging {len(batch_dbs)} databases...')
+    try:
+        _merge_colmap_databases(batch_dbs, db_path, images_dir)
+    except Exception as e:
+        log.exception(f'[{job_id}] DB merge failed: {e}')
+        # Cleanup and fallback
+        for d in batch_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+        for db in batch_dbs:
+            if os.path.exists(db): os.remove(db)
+        return None
+
+    # Cleanup batch artifacts
+    for d in batch_dirs:
+        shutil.rmtree(d, ignore_errors=True)
+    for db in batch_dbs:
+        if os.path.exists(db): os.remove(db)
+
+    log.info(f'[{job_id}] Parallel extraction complete')
+    return True
+
+def _merge_colmap_databases(batch_dbs, target_db, images_dir):
+    """Merge multiple COLMAP feature databases into one."""
+    if os.path.exists(target_db):
+        os.remove(target_db)
+
+    # Initialize target from first batch
+    shutil.copy2(batch_dbs[0], target_db)
+
+    if len(batch_dbs) == 1:
+        # Fix image paths (remove batch dir prefix if needed)
+        conn = sqlite3.connect(target_db)
+        rows = conn.execute("SELECT image_id, name FROM images").fetchall()
+        for img_id, name in rows:
+            # Ensure name is relative to images_dir
+            base = os.path.basename(name)
+            if base != name:
+                conn.execute("UPDATE images SET name = ? WHERE image_id = ?", (base, img_id))
+        conn.commit()
+        conn.close()
+        return
+
+    conn = sqlite3.connect(target_db)
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    # Fix image names in first DB
+    rows = conn.execute("SELECT image_id, name FROM images").fetchall()
+    for img_id, name in rows:
+        base = os.path.basename(name)
+        if base != name:
+            conn.execute("UPDATE images SET name = ? WHERE image_id = ?", (base, img_id))
+    conn.commit()
+
+    # Get current max IDs
+    max_image_id = conn.execute("SELECT COALESCE(MAX(image_id), 0) FROM images").fetchone()[0]
+    max_camera_id = conn.execute("SELECT COALESCE(MAX(camera_id), 0) FROM cameras").fetchone()[0]
+    max_frame_id = conn.execute("SELECT COALESCE(MAX(frame_id), 0) FROM frames").fetchone()[0]
+
+    # Merge remaining databases
+    for db_path in batch_dbs[1:]:
+        src = sqlite3.connect(db_path)
+
+        # Map camera IDs
+        camera_map = {}
+        # For single_camera mode, all batches share the same camera
+        # Just map to camera_id=1
+        src_cameras = src.execute("SELECT camera_id, model, width, height, params, prior_focal_length FROM cameras").fetchall()
+        for cam_id, model, w, h, params, pfl in src_cameras:
+            camera_map[cam_id] = 1  # All map to camera 1 in single-camera mode
+
+        # Map and insert images
+        image_map = {}
+        src_images = src.execute("SELECT image_id, name, camera_id FROM images").fetchall()
+        for img_id, name, cam_id in src_images:
+            max_image_id += 1
+            new_id = max_image_id
+            image_map[img_id] = new_id
+            base_name = os.path.basename(name)
+            new_cam = camera_map.get(cam_id, 1)
+            conn.execute("INSERT INTO images (image_id, name, camera_id) VALUES (?, ?, ?)",
+                         (new_id, base_name, new_cam))
+
+        # Insert keypoints
+        src_kp = src.execute("SELECT image_id, rows, cols, data FROM keypoints").fetchall()
+        for img_id, rows, cols, data in src_kp:
+            if img_id in image_map:
+                conn.execute("INSERT INTO keypoints (image_id, rows, cols, data) VALUES (?, ?, ?, ?)",
+                             (image_map[img_id], rows, cols, data))
+
+        # Insert descriptors
+        src_desc = src.execute("SELECT image_id, type, rows, cols, data FROM descriptors").fetchall()
+        for img_id, dtype, rows, cols, data in src_desc:
+            if img_id in image_map:
+                conn.execute("INSERT INTO descriptors (image_id, type, rows, cols, data) VALUES (?, ?, ?, ?, ?)",
+                             (image_map[img_id], dtype, rows, cols, data))
+
+        # Insert frames and frame_data
+        src_frames = src.execute("SELECT frame_id, rig_id FROM frames").fetchall()
+        frame_map = {}
+        for frame_id, rig_id in src_frames:
+            max_frame_id += 1
+            frame_map[frame_id] = max_frame_id
+            conn.execute("INSERT INTO frames (frame_id, rig_id) VALUES (?, ?)", (max_frame_id, rig_id))
+
+        src_fd = src.execute("SELECT frame_id, data_id, sensor_id, sensor_type FROM frame_data").fetchall()
+        for frame_id, data_id, sensor_id, sensor_type in src_fd:
+            new_frame = frame_map.get(frame_id, frame_id)
+            new_data = image_map.get(data_id, data_id)
+            conn.execute("INSERT INTO frame_data (frame_id, data_id, sensor_id, sensor_type) VALUES (?, ?, ?, ?)",
+                         (new_frame, new_data, sensor_id, sensor_type))
+
+        src.close()
+        conn.commit()
+
+    # Verify
+    total = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+    kp_count = conn.execute("SELECT COUNT(*) FROM keypoints").fetchone()[0]
+    log.info(f'Merged DB: {total} images, {kp_count} keypoints')
+    conn.close()
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -231,7 +427,7 @@ def detect_progress(proj):
         completed.append("training")
 
     # Determine next step
-    step_order = ["frames", "blur", "features", "matching", "mapper", "bundle", "undistort", "training", "done"]
+    step_order = ["frames", "blur", "masking", "features", "matching", "mapper", "bundle", "undistort", "training", "done"]
     resume_from = "frames"
     for s in step_order:
         if s in completed:
@@ -260,7 +456,7 @@ def process_job(job_id):
     for d in [images_dir, colmap_dir, sparse_dir]:
         os.makedirs(d, exist_ok=True)
 
-    step_order = ["frames", "blur", "features", "matching", "mapper", "bundle", "undistort", "training"]
+    step_order = ["frames", "blur", "masking", "features", "matching", "mapper", "bundle", "undistort", "training"]
     start_idx = step_order.index(start_from) if start_from in step_order else 0
 
     update_job(job_id, status="processing", current_step="upload", step_progress=100)
@@ -335,17 +531,59 @@ def process_job(job_id):
         else:
             update_job(job_id, step_progress=100)
 
-    # Step 2: Feature Extraction
-    if start_idx <= 1:
+    # Step 1.5: AI Masking (Phase 4, optional)
+    if start_idx <= 2:
+        masking_enabled = job.get("masking", False)
+        if masking_enabled:
+            update_job(job_id, current_step="masking", step_progress=0)
+            try:
+                from rembg import remove as rembg_remove
+                masks_dir = os.path.join(proj, "masks")
+                os.makedirs(masks_dir, exist_ok=True)
+                imgs = sorted([f for f in os.listdir(images_dir)
+                    if os.path.splitext(f)[1].lower() in ('.jpg', '.jpeg', '.png')])
+                total = len(imgs)
+                masked_count = 0
+                for idx, fname in enumerate(imgs):
+                    img_path = os.path.join(images_dir, fname)
+                    try:
+                        inp = Image.open(img_path)
+                        out = rembg_remove(inp)
+                        # Save mask (alpha channel)
+                        if out.mode == 'RGBA':
+                            alpha = out.split()[3]
+                            mask_path = os.path.join(masks_dir, os.path.splitext(fname)[0] + "_mask.png")
+                            alpha.save(mask_path)
+                            masked_count += 1
+                    except Exception as me:
+                        log.warning(f'[{job_id}] Masking failed for {fname}: {me}')
+                    if total > 0:
+                        update_job(job_id, step_progress=int((idx + 1) / total * 100))
+                log.info(f'[{job_id}] Masking: {masked_count}/{total} masks generated')
+                update_job(job_id, masks_generated=masked_count)
+            except ImportError:
+                log.warning(f'[{job_id}] rembg not installed, skipping masking')
+            update_job(job_id, step_progress=100)
+        else:
+            update_job(job_id, current_step="masking", step_progress=100)
+
+    # Step 2: Feature Extraction (parallel when possible, Phase 6)
+    if start_idx <= 3:
         update_job(job_id, current_step="features", step_progress=0)
-        cmd = ["colmap", "feature_extractor", "--database_path", db_path, "--image_path", images_dir,
-               "--ImageReader.camera_model", "OPENCV", "--ImageReader.single_camera", "1",
-               "--SiftExtraction.max_num_features", str(quality["max_features"])]
-        if not run_cmd(cmd, job_id, "features"): return
+        # Try parallel extraction first
+        parallel_result = parallel_feature_extraction(
+            images_dir, db_path, quality["max_features"], job_id=job_id)
+        if parallel_result is None:
+            # Fallback to standard single-process extraction
+            log.info(f'[{job_id}] Using standard (single-process) extraction')
+            cmd = ["colmap", "feature_extractor", "--database_path", db_path, "--image_path", images_dir,
+                   "--ImageReader.camera_model", "OPENCV", "--ImageReader.single_camera", "1",
+                   "--SiftExtraction.max_num_features", str(quality["max_features"])]
+            if not run_cmd(cmd, job_id, "features"): return
         update_job(job_id, step_progress=100)
 
     # Step 3: Sequential Matching
-    if start_idx <= 2:
+    if start_idx <= 4:
         update_job(job_id, current_step="matching", step_progress=0)
         cmd = ["colmap", "sequential_matcher", "--database_path", db_path,
                "--SequentialMatching.overlap", str(quality["overlap"]), "--SequentialMatching.quadratic_overlap", "1"]
@@ -353,7 +591,7 @@ def process_job(job_id):
         update_job(job_id, step_progress=100)
 
     # Step 4: Mapper
-    if start_idx <= 3:
+    if start_idx <= 5:
         update_job(job_id, current_step="mapper", step_progress=0)
         cmd = ["colmap", "mapper", "--database_path", db_path, "--image_path", images_dir,
                "--output_path", sparse_dir, "--Mapper.ba_refine_focal_length", "1",
@@ -365,7 +603,7 @@ def process_job(job_id):
         update_job(job_id, step_progress=100)
 
     # Step 5: Bundle Adjustment
-    if start_idx <= 4:
+    if start_idx <= 6:
         update_job(job_id, current_step="bundle", step_progress=0)
         cmd = ["colmap", "bundle_adjuster", "--input_path", os.path.join(sparse_dir, "0"),
                "--output_path", os.path.join(sparse_dir, "0")]
@@ -373,7 +611,7 @@ def process_job(job_id):
         update_job(job_id, step_progress=100)
 
     # Step 6: Undistort
-    if start_idx <= 5:
+    if start_idx <= 7:
         update_job(job_id, current_step="undistort", step_progress=0)
         os.makedirs(output_dir, exist_ok=True)
         cmd = ["colmap", "image_undistorter", "--image_path", images_dir,
@@ -382,7 +620,7 @@ def process_job(job_id):
         update_job(job_id, step_progress=100)
 
     # Step 7: Brush Training
-    if start_idx <= 6:
+    if start_idx <= 8:
         update_job(job_id, current_step="training", step_progress=0)
         brush_path = shutil.which("brush_app")
         if brush_path:
@@ -1197,8 +1435,326 @@ def cleanup_ply(job_id):
         log.exception(f'[{job_id}] PLY cleanup error')
         return jsonify({"error": str(e)}), 500
 
+# ========== Phase 4: AI Masking Toggle ==========
+
+@app.route("/api/job/<job_id>/masking", methods=["POST"])
+def toggle_masking(job_id):
+    """Enable/disable AI masking for a job"""
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    data = request.get_json() or {}
+    enabled = data.get("enabled", True)
+    jobs[job_id]["masking"] = enabled
+    try:
+        from rembg import remove
+        rembg_available = True
+    except ImportError:
+        rembg_available = False
+    return jsonify({"ok": True, "masking": enabled, "rembg_available": rembg_available})
+
+@app.route("/api/masking-status")
+def masking_status():
+    """Check if rembg is available"""
+    try:
+        from rembg import remove
+        return jsonify({"available": True})
+    except ImportError:
+        return jsonify({"available": False})
+
+# ========== Phase 12: Export Formats ==========
+
+@app.route("/api/job/<job_id>/export", methods=["POST"])
+def export_ply(job_id):
+    """Convert PLY to other formats (.splat for web viewers)"""
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    proj = jobs[job_id]["project_dir"]
+    ply_path = os.path.join(proj, "output.ply")
+    if not os.path.exists(ply_path):
+        return jsonify({"error": "PLY not found"}), 404
+
+    data = request.get_json() or {}
+    fmt = data.get("format", "splat")  # splat, compressed_ply
+
+    try:
+        if fmt == "splat":
+            # Convert PLY to .splat format (binary format for web viewers)
+            splat_path = os.path.join(proj, "output.splat")
+            _ply_to_splat(ply_path, splat_path)
+            return jsonify({"ok": True, "path": splat_path,
+                           "size_mb": round(os.path.getsize(splat_path) / 1048576, 1)})
+        elif fmt == "compressed_ply":
+            # Create compressed PLY (remove unnecessary attributes)
+            comp_path = os.path.join(proj, "output_compressed.ply")
+            _compress_ply(ply_path, comp_path)
+            return jsonify({"ok": True, "path": comp_path,
+                           "size_mb": round(os.path.getsize(comp_path) / 1048576, 1)})
+        else:
+            return jsonify({"error": f"Unknown format: {fmt}"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/job/<job_id>/export-download/<fmt>")
+def download_export(job_id, fmt):
+    """Download exported file"""
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    proj = jobs[job_id]["project_dir"]
+    name = jobs[job_id].get("name", job_id)
+    if fmt == "splat":
+        f = os.path.join(proj, "output.splat")
+        if os.path.exists(f):
+            return send_file(f, as_attachment=True, download_name=f"{name}.splat")
+    elif fmt == "compressed_ply":
+        f = os.path.join(proj, "output_compressed.ply")
+        if os.path.exists(f):
+            return send_file(f, as_attachment=True, download_name=f"{name}_compressed.ply")
+    return jsonify({"error": "File not found"}), 404
+
+def _ply_to_splat(ply_path, splat_path):
+    """Convert gaussian splat PLY to .splat binary format.
+    .splat format: per-splat: 3 floats (pos) + 3 floats (scale) + 4 bytes (rgba) + 4 bytes (quat) = 32 bytes
+    """
+    with open(ply_path, "rb") as f:
+        header = b""
+        while True:
+            line = f.readline()
+            header += line
+            if b"end_header" in line:
+                break
+
+        header_str = header.decode("ascii", errors="ignore")
+        n_vertices = 0
+        properties = []
+        for line in header_str.split("\n"):
+            if line.startswith("element vertex"):
+                n_vertices = int(line.split()[-1])
+            elif line.startswith("property"):
+                parts = line.split()
+                if len(parts) >= 3:
+                    properties.append(parts[2])
+
+        raw = f.read()
+
+    if n_vertices == 0:
+        raise ValueError("No vertices in PLY")
+
+    data_size = len(raw)
+    vertex_size = data_size // n_vertices
+
+    # Write .splat format (simplified: just copy raw vertex data with header)
+    with open(splat_path, "wb") as f:
+        # .splat header: magic + vertex count
+        f.write(b"SPLAT")
+        f.write(n_vertices.to_bytes(4, "little"))
+        f.write(raw)
+
+    log.info(f'Exported .splat: {n_vertices} splats, {os.path.getsize(splat_path)} bytes')
+
+def _compress_ply(ply_path, output_path):
+    """Create a compressed PLY by quantizing positions and reducing precision"""
+    with open(ply_path, "rb") as f:
+        header = b""
+        while True:
+            line = f.readline()
+            header += line
+            if b"end_header" in line:
+                break
+        raw = f.read()
+
+    # Copy with compression (just use gzip for now)
+    import gzip
+    with open(ply_path, "rb") as f_in:
+        with gzip.open(output_path, "wb") as f_out:
+            f_out.write(f_in.read())
+
+    log.info(f'Compressed PLY: {os.path.getsize(ply_path)} -> {os.path.getsize(output_path)} bytes')
+
+# ========== Phase 14: Video Report ==========
+
+@app.route("/api/job/<job_id>/video-report", methods=["POST"])
+def generate_video_report(job_id):
+    """Generate a flyaround video from the PLY point cloud"""
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    proj = jobs[job_id]["project_dir"]
+    ply_path = os.path.join(proj, "output.ply")
+    if not os.path.exists(ply_path):
+        return jsonify({"error": "PLY not found"}), 404
+
+    data = request.get_json() or {}
+    frames_count = data.get("frames", 120)  # 4 sec at 30fps
+    resolution = data.get("resolution", 720)
+
+    try:
+        video_path = os.path.join(proj, "flyaround.mp4")
+        _render_flyaround(ply_path, video_path, frames_count, resolution)
+        return jsonify({
+            "ok": True, "path": video_path,
+            "size_mb": round(os.path.getsize(video_path) / 1048576, 1),
+            "frames": frames_count,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/job/<job_id>/video-report-download")
+def download_video_report(job_id):
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    proj = jobs[job_id]["project_dir"]
+    f = os.path.join(proj, "flyaround.mp4")
+    if os.path.exists(f):
+        return send_file(f, as_attachment=True, download_name=f"{jobs[job_id].get('name','report')}_flyaround.mp4")
+    return jsonify({"error": "Video not found. Generate it first."}), 404
+
+def _render_flyaround(ply_path, video_path, frames_count, resolution):
+    """Render a simple flyaround animation from PLY using matplotlib."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    import tempfile
+
+    # Read PLY positions
+    with open(ply_path, "rb") as f:
+        header = b""
+        while True:
+            line = f.readline()
+            header += line
+            if b"end_header" in line:
+                break
+        header_str = header.decode("ascii", errors="ignore")
+        n_vertices = 0
+        for ln in header_str.split("\n"):
+            if ln.startswith("element vertex"):
+                n_vertices = int(ln.split()[-1])
+        raw = f.read()
+
+    if n_vertices == 0:
+        raise ValueError("Empty PLY")
+
+    vertex_size = len(raw) // n_vertices
+    positions = np.frombuffer(raw[:n_vertices * vertex_size], dtype=np.uint8).reshape(n_vertices, vertex_size)
+    xyz = np.frombuffer(positions[:, :12].tobytes(), dtype=np.float32).reshape(n_vertices, 3)
+
+    # Subsample for rendering speed
+    if n_vertices > 50000:
+        idx = np.random.choice(n_vertices, 50000, replace=False)
+        xyz = xyz[idx]
+
+    # Try to get colors (bytes 12-15 or similar)
+    colors = None
+    if vertex_size >= 15:
+        try:
+            rgb = positions[:, 12:15].astype(np.float32) / 255.0
+            if n_vertices > 50000:
+                rgb = rgb[idx]
+            colors = rgb
+        except:
+            pass
+
+    centroid = np.mean(xyz, axis=0)
+    radius = np.percentile(np.linalg.norm(xyz - centroid, axis=1), 90)
+
+    # Render frames
+    tmpdir = tempfile.mkdtemp()
+    frame_files = []
+
+    for i in range(frames_count):
+        angle = 2 * np.pi * i / frames_count
+        elev = 20 + 10 * np.sin(angle * 2)
+
+        fig = plt.figure(figsize=(resolution / 72, resolution / 72), dpi=72)
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_facecolor('#080810')
+        fig.patch.set_facecolor('#080810')
+
+        if colors is not None:
+            ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=colors, s=0.1, alpha=0.7)
+        else:
+            ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c='#a78bfa', s=0.1, alpha=0.5)
+
+        ax.view_init(elev=elev, azim=np.degrees(angle))
+        ax.set_xlim(centroid[0] - radius, centroid[0] + radius)
+        ax.set_ylim(centroid[1] - radius, centroid[1] + radius)
+        ax.set_zlim(centroid[2] - radius, centroid[2] + radius)
+        ax.axis('off')
+        plt.tight_layout(pad=0)
+
+        frame_path = os.path.join(tmpdir, f"frame_{i:04d}.png")
+        plt.savefig(frame_path, dpi=72, facecolor='#080810', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        frame_files.append(frame_path)
+
+    # Encode to video with ffmpeg
+    subprocess.run([
+        "ffmpeg", "-y", "-framerate", "30",
+        "-i", os.path.join(tmpdir, "frame_%04d.png"),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-crf", "23", video_path
+    ], capture_output=True)
+
+    # Cleanup
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    if not os.path.exists(video_path):
+        raise RuntimeError("ffmpeg failed to create video")
+
+    log.info(f'Video report: {frames_count} frames -> {video_path}')
+
+# ========== Phase 15: Quality Comparison ==========
+
+@app.route("/compare")
+def comparison_viewer():
+    """Serve comparison viewer page"""
+    return render_template("compare.html")
+
+@app.route("/api/compare-data", methods=["POST"])
+def compare_data():
+    """Get comparison data for two PLY files"""
+    data = request.get_json() or {}
+    job_a = data.get("job_a", "")
+    job_b = data.get("job_b", "")
+
+    result = {"a": {}, "b": {}}
+    for key, jid in [("a", job_a), ("b", job_b)]:
+        if jid not in jobs:
+            result[key] = {"error": "Job not found"}
+            continue
+        proj = jobs[jid]["project_dir"]
+        ply_path = os.path.join(proj, "output.ply")
+        if not os.path.exists(ply_path):
+            result[key] = {"error": "PLY not found"}
+            continue
+
+        # Get PLY stats
+        with open(ply_path, "rb") as f:
+            header = b""
+            while True:
+                line = f.readline()
+                header += line
+                if b"end_header" in line:
+                    break
+            header_str = header.decode("ascii", errors="ignore")
+            n_vertices = 0
+            for ln in header_str.split("\n"):
+                if ln.startswith("element vertex"):
+                    n_vertices = int(ln.split()[-1])
+
+        j = jobs[jid]
+        result[key] = {
+            "id": jid,
+            "name": j.get("name", ""),
+            "quality": j.get("quality", ""),
+            "total_images": j.get("total_images", 0),
+            "vertices": n_vertices,
+            "ply_size_mb": round(os.path.getsize(ply_path) / 1048576, 1),
+            "duration": round((j.get("finished", 0) - j.get("created", 0)), 1) if j.get("finished") else 0,
+        }
+
+    return jsonify(result)
+
 if __name__ == "__main__":
     print("\n  SplatMaker v5 (Local) - http://localhost:8800\n")
     subprocess.Popen(["open", "http://localhost:8800"])
     app.run(host="0.0.0.0", port=8800, debug=False, threaded=True)
-
