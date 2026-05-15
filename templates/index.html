@@ -72,11 +72,38 @@ h1{font-size:28px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);-webkit-bac
 .chart-card h3{font-size:13px;color:#888;margin-bottom:10px}
 canvas{max-height:140px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid #2a2a3e;padding-bottom:8px}
+.tab{background:none;border:none;color:#666;font-size:13px;font-family:inherit;cursor:pointer;padding:8px 16px;border-radius:8px 8px 0 0;transition:all .2s}
+.tab.active{color:#a78bfa;background:rgba(139,92,246,0.1);font-weight:600}
+.tab:hover{color:#c4b5fd}
+.tab-pane{display:none}
+.tab-pane.active{display:block}
+.project-item{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:12px;padding:14px;margin-bottom:8px;display:flex;align-items:center;gap:12px}
+.project-item .p-info{flex:1;min-width:0}
+.project-item .p-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.project-item .p-meta{font-size:10px;color:#666;margin-top:2px}
+.project-item .p-actions{display:flex;gap:6px;flex-shrink:0}
+.tg-form{display:flex;flex-direction:column;gap:10px}
+.tg-form input[type=text]{padding:8px 12px;background:#0e0e1a;border:1px solid #2a2a3e;border-radius:8px;color:#fff;font-size:13px;font-family:inherit}
+.tg-row{display:flex;align-items:center;gap:10px}
+.tg-row label{font-size:12px;color:#888;min-width:80px}
+.toggle{position:relative;width:40px;height:22px;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0}
+.toggle .slider{position:absolute;inset:0;background:#333;border-radius:22px;transition:.3s}
+.toggle .slider:before{content:'';position:absolute;width:16px;height:16px;left:3px;bottom:3px;background:#666;border-radius:50%;transition:.3s}
+.toggle input:checked+.slider{background:#6366f1}
+.toggle input:checked+.slider:before{transform:translateX(18px);background:#fff}
 </style>
 </head>
 <body>
 <div class="app">
 <header><h1>SplatMaker</h1><div class="tagline">Video/Photo -> 3D Gaussian Splat | Local Processing</div></header>
+<div class="tabs">
+  <button class="tab active" onclick="showTab('main')">Обработка</button>
+  <button class="tab" onclick="showTab('projects')">Проекты</button>
+  <button class="tab" onclick="showTab('settings')">Настройки</button>
+</div>
+<div id="tab-main" class="tab-pane active">
 <div class="card">
   <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
     <h3>Перетащи видео, фото или папку</h3>
@@ -109,6 +136,43 @@ canvas{max-height:140px}
 </div>
 <div id="jobList"></div>
 <div class="chart-card"><h3>Система</h3><canvas id="cpuChart"></canvas></div>
+</div>
+
+<div id="tab-projects" class="tab-pane">
+  <div class="card">
+    <div class="section-title">История проектов</div>
+    <div id="projectsList"><div style="color:#666;font-size:12px;text-align:center;padding:20px">Загрузка...</div></div>
+  </div>
+</div>
+
+<div id="tab-settings" class="tab-pane">
+  <div class="card">
+    <div class="section-title">Telegram уведомления</div>
+    <div class="tg-form" id="tgForm">
+      <div class="tg-row">
+        <label>Активно</label>
+        <label class="toggle"><input type="checkbox" id="tgEnabled"><span class="slider"></span></label>
+      </div>
+      <div class="tg-row">
+        <label>Bot Token</label>
+        <input type="text" id="tgToken" placeholder="123456:ABC-DEF...">
+      </div>
+      <div class="tg-row">
+        <label>Chat ID</label>
+        <input type="text" id="tgChatId" placeholder="-1001234567890">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm btn-primary" onclick="saveTelegram()">Сохранить</button>
+        <button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="testTelegram()">Тест</button>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="section-title">Хранилище</div>
+    <div style="font-size:12px;color:#888" id="storageInfo">Загрузка...</div>
+    <button class="btn btn-sm btn-red" style="margin-top:10px;width:auto" onclick="clearCache()">Очистить кэш</button>
+  </div>
+</div>
 </div>
 
 <script>
@@ -319,7 +383,7 @@ function renderJobs(jl){
 
     let acts="";
     if(j.status==="processing") acts=`<div class="job-actions"><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button><button class="btn btn-sm btn-red" onclick="cancelJob('${j.id}')">Отменить</button></div>`;
-    else if(j.status==="done") acts=`<div class="job-actions"><a href="/viewer/${j.id}" class="btn btn-sm" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff">3D Просмотр</a><a href="/api/job/${j.id}/download" class="btn btn-sm btn-green">Скачать</a><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button></div>`;
+    else if(j.status==="done") acts=`<div class="job-actions"><a href="/viewer/${j.id}" class="btn btn-sm" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff">3D Просмотр</a><a href="/api/job/${j.id}/download" class="btn btn-sm btn-green">Скачать</a><button class="btn btn-sm" style="background:#334155;color:#f59e0b" onclick="cleanupPly('${j.id}')">Очистить PLY</button><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button></div>`;
     else if(j.status==="error") acts=`<div class="job-actions"><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button></div>`;
 
     const err=j.error?`<div style="color:#f87171;font-size:11px;margin-top:6px">${j.error}</div>`:"";
@@ -337,6 +401,71 @@ async function clearCache(){if(!confirm('Удалить все завершён�
 async function updateCacheInfo(){try{const r=await fetch('/api/cache-stats');const d=await r.json();
   document.getElementById('cacheInfo').textContent=d.size_mb>0?(d.projects+' проектов, '+d.size_mb+' MB'):'Пусто'}catch(e){}}
 updateCacheInfo();setInterval(updateCacheInfo,30000);
+
+// Tabs
+function showTab(name){
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  event.target.classList.add('active');
+  if(name==='projects') loadProjects();
+  if(name==='settings') loadTelegramConfig();
+}
+
+// Projects
+async function loadProjects(){
+  try{
+    const r=await fetch('/api/projects'); const d=await r.json();
+    const c=document.getElementById('projectsList');
+    if(!d.length){c.innerHTML='<div style="color:#666;font-size:12px;text-align:center;padding:20px">Нет проектов</div>';return}
+    c.innerHTML=d.map(p=>{
+      const ply=p.has_ply?`<span style="color:#34d399;font-size:10px">PLY ${p.ply_size_mb||0}MB</span>`:'<span style="color:#666;font-size:10px">Нет PLY</span>';
+      return `<div class="project-item">
+        <div class="p-info"><div class="p-name">${p.name||p.id}</div>
+        <div class="p-meta">${p.total_images||0} images | ${p.quality||'?'} | ${ply}</div></div>
+        <div class="p-actions">
+          ${p.has_ply?`<a href="/api/job/${p.id}/download" class="btn btn-sm btn-green" style="font-size:10px;padding:4px 8px">Скачать</a>`:''}
+          <button class="btn btn-sm btn-red" style="font-size:10px;padding:4px 8px" onclick="deleteProject('${p.id}')">Удалить</button>
+        </div></div>`;
+    }).join('');
+  }catch(e){}
+}
+async function deleteProject(id){
+  if(!confirm('Удалить проект?')) return;
+  await fetch(`/api/project/${id}/delete`,{method:'POST'});
+  loadProjects(); updateCacheInfo();
+}
+
+// Telegram
+async function loadTelegramConfig(){
+  try{
+    const r=await fetch('/api/telegram/config'); const d=await r.json();
+    document.getElementById('tgEnabled').checked=d.enabled||false;
+    document.getElementById('tgToken').value=d.token||'';
+    document.getElementById('tgChatId').value=d.chat_id||'';
+  }catch(e){}
+}
+async function saveTelegram(){
+  const cfg={enabled:document.getElementById('tgEnabled').checked,
+    token:document.getElementById('tgToken').value, chat_id:document.getElementById('tgChatId').value};
+  await fetch('/api/telegram/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  alert('Сохранено!');
+}
+async function testTelegram(){
+  const r=await fetch('/api/telegram/test',{method:'POST'}); const d=await r.json();
+  alert(d.ok?'Отправлено!':'Ошибка отправки');
+}
+
+// Floater cleanup
+async function cleanupPly(id){
+  const t=prompt('Порог очистки (sigma, по умолчанию 2.0):','2.0');
+  if(t===null) return;
+  const r=await fetch(`/api/job/${id}/cleanup-ply`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({threshold:parseFloat(t)||2.0})});
+  const d=await r.json();
+  if(d.ok) alert(`Очищено! Было: ${d.original}, осталось: ${d.kept}, удалено: ${d.removed}`);
+  else alert('Ошибка: '+(d.error||'unknown'));
+}
 
 const ctx=document.getElementById("cpuChart").getContext("2d");
 const chart=new Chart(ctx,{type:"line",data:{labels:[],datasets:[

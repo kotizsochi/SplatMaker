@@ -434,10 +434,26 @@ def worker():
         j = jobs.get(job_id, {})
         log.info(f'===== JOB [{job_id}] "{j.get("name")}" q={j.get("quality")} sources={len(j.get("sources",[]))} =====')
         try:
+            send_telegram(f"SplatMaker: Начало обработки\n<b>{j.get('name','')}</b>\nКачество: {j.get('quality','')}")
             process_job(job_id)
+            status = jobs.get(job_id, {}).get("status", "")
+            if status == "done":
+                proj = jobs[job_id].get("project_dir", "")
+                thumb = None
+                for td in ["images", "frames"]:
+                    tdir = os.path.join(proj, td)
+                    if os.path.isdir(tdir):
+                        imgs = sorted(glob.glob(os.path.join(tdir, "*.jpg")))
+                        if imgs:
+                            thumb = imgs[0]
+                            break
+                send_telegram(f"SplatMaker: Готово!\n<b>{j.get('name','')}</b>", thumb)
+            elif status == "error":
+                send_telegram(f"SplatMaker: Ошибка\n<b>{j.get('name','')}</b>\n{jobs.get(job_id,{}).get('error','')}")
         except Exception as e:
             log.exception(f'[{job_id}] EXCEPTION')
             update_job(job_id, status="error", error=str(e))
+            send_telegram(f"SplatMaker: Критическая ошибка\n<b>{j.get('name','')}</b>\n{str(e)}")
         log.info(f'===== JOB [{job_id}] END status={jobs.get(job_id,{}).get("status")} =====')
         job_queue.task_done()
 
@@ -767,7 +783,422 @@ def stream():
             time.sleep(2)
     return Response(gen(), mimetype="text/event-stream")
 
+# ========== Phase 5: 360 Support ==========
+
+def is_equirectangular(img_path):
+    """Detect equirectangular panorama by 2:1 aspect ratio"""
+    try:
+        img = Image.open(img_path)
+        w, h = img.size
+        ratio = w / h
+        return 1.9 <= ratio <= 2.1  # ~2:1
+    except:
+        return False
+
+def equirect_to_cubemap(img_path, output_dir, face_size=1024):
+    """Convert equirectangular image to 6 cubemap faces using ffmpeg"""
+    faces = ["front", "back", "left", "right", "top", "bottom"]
+    v360_maps = ["e:c", "e:c", "e:c", "e:c", "e:c", "e:c"]
+    yaw_pitch = [(0,0), (180,0), (270,0), (90,0), (0,90), (0,-90)]
+    results = []
+    for i, (face, (yaw, pitch)) in enumerate(zip(faces, yaw_pitch)):
+        out = os.path.join(output_dir, f"360_{face}_{os.path.basename(img_path)}")
+        cmd = ["ffmpeg", "-y", "-i", img_path,
+               "-vf", f"v360=e:flat:yaw={yaw}:pitch={pitch}:w={face_size}:h={face_size}",
+               "-frames:v", "1", out]
+        subprocess.run(cmd, capture_output=True)
+        if os.path.exists(out):
+            results.append(out)
+    return results
+
+@app.route("/api/detect-360", methods=["POST"])
+def detect_360():
+    """Detect if an image is equirectangular panorama"""
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    if not path or not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 400
+    is_pano = is_equirectangular(path)
+    return jsonify({"is_panorama": is_pano, "path": path})
+
+# ========== Phase 7: Project History ==========
+
+@app.route("/api/projects")
+def list_projects():
+    """List all projects with metadata from project.json"""
+    projects = []
+    if os.path.isdir(PROJECTS_DIR):
+        for d in sorted(os.listdir(PROJECTS_DIR), reverse=True):
+            dp = os.path.join(PROJECTS_DIR, d)
+            if not os.path.isdir(dp):
+                continue
+            meta_path = os.path.join(dp, "project.json")
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    meta["dir"] = dp
+                    meta["has_ply"] = os.path.exists(os.path.join(dp, "output.ply"))
+                    # Get file size
+                    ply_path = os.path.join(dp, "output.ply")
+                    meta["ply_size_mb"] = round(os.path.getsize(ply_path) / 1048576, 1) if os.path.exists(ply_path) else 0
+                    # Thumbnail check
+                    for td in ["images", "frames"]:
+                        tdir = os.path.join(dp, td)
+                        if os.path.isdir(tdir):
+                            imgs = sorted(glob.glob(os.path.join(tdir, "*.jpg")) + glob.glob(os.path.join(tdir, "*.JPG")) + glob.glob(os.path.join(tdir, "*.png")))
+                            if imgs:
+                                meta["has_thumbnail"] = True
+                                break
+                    projects.append(meta)
+                except:
+                    pass
+            else:
+                # No project.json, basic info
+                images_dir = os.path.join(dp, "images")
+                img_count = len(os.listdir(images_dir)) if os.path.isdir(images_dir) else 0
+                projects.append({
+                    "id": d, "name": d, "dir": dp,
+                    "total_images": img_count,
+                    "has_ply": os.path.exists(os.path.join(dp, "output.ply")),
+                    "quality": "unknown"
+                })
+    return jsonify(projects)
+
+@app.route("/api/project/<project_id>/delete", methods=["POST"])
+def delete_project(project_id):
+    """Delete a project folder"""
+    dp = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.isdir(dp):
+        return jsonify({"error": "Not found"}), 404
+    # Don't delete active jobs
+    for jid, j in jobs.items():
+        if j.get("project_dir") == dp and j.get("status") == "processing":
+            return jsonify({"error": "Project is currently processing"}), 400
+    shutil.rmtree(dp, ignore_errors=True)
+    # Remove from jobs dict
+    for jid in list(jobs.keys()):
+        if jobs[jid].get("project_dir") == dp:
+            del jobs[jid]
+    return jsonify({"ok": True})
+
+# ========== Phase 9: Telegram Notifications ==========
+
+TELEGRAM_CONFIG_FILE = os.path.join(BASE, "telegram.json")
+
+def load_telegram_config():
+    if os.path.exists(TELEGRAM_CONFIG_FILE):
+        try:
+            with open(TELEGRAM_CONFIG_FILE) as f:
+                return json.load(f)
+        except:
+            pass
+    return {"enabled": False, "token": "", "chat_id": ""}
+
+def send_telegram(text, photo_path=None):
+    """Send telegram notification"""
+    cfg = load_telegram_config()
+    if not cfg.get("enabled") or not cfg.get("token") or not cfg.get("chat_id"):
+        return False
+    try:
+        import urllib.request
+        token = cfg["token"]
+        chat_id = cfg["chat_id"]
+        if photo_path and os.path.exists(photo_path):
+            # Send photo with caption
+            import urllib.parse
+            url = f"https://api.telegram.org/bot{token}/sendPhoto"
+            boundary = "----SplatMakerBoundary"
+            body = []
+            body.append(f"--{boundary}".encode())
+            body.append(f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}'.encode())
+            body.append(f"--{boundary}".encode())
+            body.append(f'Content-Disposition: form-data; name="caption"\r\n\r\n{text}'.encode())
+            body.append(f"--{boundary}".encode())
+            with open(photo_path, "rb") as pf:
+                photo_data = pf.read()
+            body.append(f'Content-Disposition: form-data; name="photo"; filename="thumb.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode() + photo_data)
+            body.append(f"--{boundary}--".encode())
+            payload = b"\r\n".join(body)
+            req = urllib.request.Request(url, data=payload,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+            urllib.request.urlopen(req, timeout=10)
+        else:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        log.warning(f"Telegram send failed: {e}")
+        return False
+
+@app.route("/api/telegram/config", methods=["GET"])
+def get_telegram_config():
+    cfg = load_telegram_config()
+    return jsonify(cfg)
+
+@app.route("/api/telegram/config", methods=["POST"])
+def save_telegram_config():
+    data = request.get_json()
+    cfg = {
+        "enabled": data.get("enabled", False),
+        "token": data.get("token", "").strip(),
+        "chat_id": data.get("chat_id", "").strip()
+    }
+    with open(TELEGRAM_CONFIG_FILE, "w") as f:
+        json.dump(cfg, f)
+    return jsonify({"ok": True})
+
+@app.route("/api/telegram/test", methods=["POST"])
+def test_telegram():
+    ok = send_telegram("SplatMaker: Test notification OK!")
+    return jsonify({"ok": ok})
+
+# ========== Phase 10: Batch Mode ==========
+
+@app.route("/api/batch", methods=["POST"])
+def batch_start():
+    """Start batch processing: each video becomes a separate project"""
+    data = request.get_json()
+    batch_sources = data.get("sources", [])
+    quality = data.get("quality", "medium")
+    frame_every = data.get("frame_every", 6)
+    batch_id = f"batch_{int(time.time())}"
+    created_jobs = []
+
+    for src in batch_sources:
+        src_path = src.get("path", "")
+        if not src_path or not os.path.isfile(src_path):
+            continue
+        ext = os.path.splitext(src_path)[1].lower()
+        if ext not in VIDEO_EXT:
+            continue
+
+        name = os.path.splitext(os.path.basename(src_path))[0]
+        job_id = f"{batch_id}_{uuid.uuid4().hex[:6]}"
+        proj = os.path.join(PROJECTS_DIR, job_id)
+        os.makedirs(proj, exist_ok=True)
+
+        job_sources = [{"type": "video", "path": src_path, "name": os.path.basename(src_path), "frame_every": frame_every}]
+        jobs[job_id] = {
+            "id": job_id, "name": name, "quality": quality,
+            "sources": job_sources, "status": "queued",
+            "project_dir": proj, "start_from": "frames",
+            "current_step": "upload", "step_progress": 0,
+            "total_images": 0, "created": time.time(),
+            "step_times": {}, "batch_id": batch_id,
+        }
+        job_queue.put(job_id)
+        created_jobs.append({"id": job_id, "name": name})
+        log.info(f'[BATCH] Created job {job_id} for {name}')
+
+    return jsonify({"batch_id": batch_id, "jobs": created_jobs, "count": len(created_jobs)})
+
+# ========== Phase 11: HDR Detection ==========
+
+@app.route("/api/detect-hdr", methods=["POST"])
+def detect_hdr():
+    """Detect if video is HDR using ffprobe"""
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    if not path or not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 400
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=color_transfer,color_primaries,pix_fmt,bits_per_raw_sample",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=10)
+        info = json.loads(r.stdout)
+        stream = info.get("streams", [{}])[0]
+        is_hdr = (
+            stream.get("color_transfer", "") in ["smpte2084", "arib-std-b67"] or
+            stream.get("color_primaries", "") == "bt2020" or
+            stream.get("pix_fmt", "").endswith("10le") or
+            int(stream.get("bits_per_raw_sample", "8")) > 8
+        )
+        return jsonify({
+            "is_hdr": is_hdr,
+            "color_transfer": stream.get("color_transfer", ""),
+            "color_primaries": stream.get("color_primaries", ""),
+            "pix_fmt": stream.get("pix_fmt", ""),
+            "bits": stream.get("bits_per_raw_sample", "8")
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== Phase 13: Auto Quality Detection ==========
+
+@app.route("/api/analyze-source", methods=["POST"])
+def analyze_source():
+    """Analyze video/image source and recommend settings"""
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    if not path or not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 400
+
+    ext = os.path.splitext(path)[1].lower()
+    result = {"path": path, "recommendations": {}}
+
+    if ext in VIDEO_EXT:
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames,codec_name",
+                 "-show_entries", "format=duration",
+                 "-of", "json", path],
+                capture_output=True, text=True, timeout=15)
+            info = json.loads(r.stdout)
+            stream = info.get("streams", [{}])[0]
+            fmt = info.get("format", {})
+
+            w = int(stream.get("width", 0))
+            h = int(stream.get("height", 0))
+            fps_str = stream.get("r_frame_rate", "30/1")
+            fps_parts = fps_str.split("/")
+            fps = round(int(fps_parts[0]) / max(int(fps_parts[1]), 1), 1) if len(fps_parts) == 2 else 30
+            duration = float(fmt.get("duration", stream.get("duration", 0)))
+            total_frames = int(fps * duration)
+
+            # Recommendations
+            if w >= 3840:  # 4K+
+                rec_quality = "high"
+                rec_frame_every = max(int(fps / 3), 3)  # ~3 FPS
+            elif w >= 1920:  # 1080p
+                rec_quality = "medium"
+                rec_frame_every = max(int(fps / 4), 4)  # ~4 FPS
+            else:
+                rec_quality = "fast"
+                rec_frame_every = max(int(fps / 5), 2)  # ~5 FPS
+
+            expected_frames = total_frames // rec_frame_every
+            # Warn if too many or too few
+            warnings = []
+            if expected_frames > 2000:
+                warnings.append(f"Много кадров ({expected_frames}). Увеличьте интервал.")
+                rec_frame_every = max(rec_frame_every, int(total_frames / 1500))
+            elif expected_frames < 50:
+                warnings.append(f"Мало кадров ({expected_frames}). Уменьшите интервал.")
+                rec_frame_every = max(1, rec_frame_every // 2)
+
+            if duration < 10:
+                warnings.append("Короткое видео. Может не хватить ракурсов.")
+            if duration > 600:
+                warnings.append("Длинное видео (>10 мин). Рассмотрите обрезку.")
+
+            # Check if panoramic
+            is_pano = 1.9 <= (w / max(h, 1)) <= 2.1
+
+            result.update({
+                "width": w, "height": h, "fps": fps,
+                "duration": round(duration, 1), "total_frames": total_frames,
+                "codec": stream.get("codec_name", ""),
+                "is_panorama": is_pano,
+                "recommendations": {
+                    "quality": rec_quality,
+                    "frame_every": rec_frame_every,
+                    "expected_frames": total_frames // rec_frame_every,
+                },
+                "warnings": warnings,
+            })
+        except Exception as e:
+            result["error"] = str(e)
+    elif ext in PHOTO_EXT:
+        try:
+            img = Image.open(path)
+            w, h = img.size
+            is_pano = 1.9 <= (w / max(h, 1)) <= 2.1
+            result.update({
+                "width": w, "height": h,
+                "is_panorama": is_pano,
+                "recommendations": {"quality": "medium" if w >= 3000 else "fast"},
+            })
+        except Exception as e:
+            result["error"] = str(e)
+
+    return jsonify(result)
+
+# ========== Phase 8: Floater Removal (PLY cleanup) ==========
+
+@app.route("/api/job/<job_id>/cleanup-ply", methods=["POST"])
+def cleanup_ply(job_id):
+    """Remove statistical outliers from PLY point cloud"""
+    if job_id not in jobs:
+        return jsonify({"error": "Not found"}), 404
+    proj = jobs[job_id]["project_dir"]
+    ply_path = os.path.join(proj, "output.ply")
+    if not os.path.exists(ply_path):
+        return jsonify({"error": "PLY not found"}), 404
+
+    data = request.get_json() or {}
+    threshold = data.get("threshold", 2.0)  # std deviations
+
+    try:
+        # Read PLY (simple binary parser for point cloud)
+        with open(ply_path, "rb") as f:
+            header = b""
+            while True:
+                line = f.readline()
+                header += line
+                if b"end_header" in line:
+                    break
+
+            header_str = header.decode("ascii", errors="ignore")
+            n_vertices = 0
+            for line in header_str.split("\n"):
+                if line.startswith("element vertex"):
+                    n_vertices = int(line.split()[-1])
+
+            if n_vertices == 0:
+                return jsonify({"error": "No vertices found"}), 400
+
+            # Read all vertex data
+            data_size = os.path.getsize(ply_path) - len(header)
+            vertex_size = data_size // n_vertices
+            raw = f.read()
+
+        # Parse xyz (first 12 bytes = 3 floats)
+        positions = np.frombuffer(raw[:n_vertices * vertex_size], dtype=np.uint8).reshape(n_vertices, vertex_size)
+        xyz = np.frombuffer(positions[:, :12].tobytes(), dtype=np.float32).reshape(n_vertices, 3)
+
+        # Statistical outlier removal
+        centroid = np.mean(xyz, axis=0)
+        dists = np.linalg.norm(xyz - centroid, axis=1)
+        mean_d = np.mean(dists)
+        std_d = np.std(dists)
+        mask = dists < (mean_d + threshold * std_d)
+        kept = int(np.sum(mask))
+        removed = n_vertices - kept
+
+        if removed > 0 and kept > 100:
+            # Backup original
+            backup = ply_path + ".backup"
+            if not os.path.exists(backup):
+                shutil.copy2(ply_path, backup)
+
+            # Write cleaned PLY
+            kept_data = positions[mask]
+            new_header = header_str.replace(f"element vertex {n_vertices}", f"element vertex {kept}")
+            with open(ply_path, "wb") as f:
+                f.write(new_header.encode("ascii"))
+                f.write(kept_data.tobytes())
+
+            log.info(f'[{job_id}] Floater cleanup: {removed} removed, {kept} kept (threshold={threshold})')
+
+        return jsonify({
+            "ok": True,
+            "original": n_vertices,
+            "kept": kept,
+            "removed": removed,
+            "threshold": threshold
+        })
+    except Exception as e:
+        log.exception(f'[{job_id}] PLY cleanup error')
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     print("\n  SplatMaker v5 (Local) - http://localhost:8800\n")
     subprocess.Popen(["open", "http://localhost:8800"])
     app.run(host="0.0.0.0", port=8800, debug=False, threaded=True)
+
