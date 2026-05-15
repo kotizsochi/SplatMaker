@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><title>SplatMaker</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#080810;color:#e0e0e0;min-height:100vh}
+.app{max-width:900px;margin:0 auto;padding:30px 20px}
+header{text-align:center;margin-bottom:30px}
+h1{font-size:28px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.tagline{font-size:13px;color:#666}
+.card{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:16px;padding:24px;margin-bottom:20px}
+.dropzone{border:2px dashed #333;border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all .3s}
+.dropzone:hover,.dropzone.drag{border-color:#8b5cf6;background:rgba(139,92,246,0.05)}
+.dropzone h3{font-size:15px;color:#aaa;margin-bottom:4px}
+.dropzone p{font-size:11px;color:#555}
+.path-input{width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;margin:8px 0}
+.src-list{margin-top:12px}
+.src-item{background:rgba(255,255,255,0.03);border:1px solid #2a2a3e;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+.src-icon{font-size:18px;flex-shrink:0;width:24px;text-align:center}
+.src-info{flex:1;min-width:0}
+.src-name{font-size:12px;font-weight:600;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-meta{font-size:10px;color:#666;margin-top:2px}
+.src-ctrl{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.src-ctrl label{font-size:10px;color:#888}
+.src-ctrl select{padding:3px 6px;background:#0e0e1a;border:1px solid #2a2a3e;border-radius:4px;color:#fff;font-size:11px;font-family:inherit}
+.src-del{background:none;border:none;color:#666;cursor:pointer;font-size:14px;padding:4px}
+.src-del:hover{color:#f87171}
+.src-tag{font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600}
+.src-tag.v{background:#7c3aed20;color:#a78bfa}
+.src-tag.p{background:#06b6d420;color:#22d3ee}
+.src-tag.f{background:#f59e0b20;color:#fbbf24}
+.src-summary{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;font-size:11px;color:#888}
+.src-summary b{color:#a78bfa}
+.settings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.field label{display:block;font-size:11px;color:#888;margin-bottom:4px}
+.field input,.field select{width:100%;padding:8px 12px;background:#0e0e1a;border:1px solid #2a2a3e;border-radius:8px;color:#fff;font-size:13px;font-family:inherit}
+.btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:11px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit;width:100%;margin-top:14px}
+.btn-primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(99,102,241,0.3)}
+.btn:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+.btn-sm{padding:6px 12px;font-size:11px;width:auto;margin:0;border-radius:6px}
+.btn-green{background:linear-gradient(135deg,#059669,#10b981);color:#fff}
+.btn-red{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff}
+.section-title{font-size:15px;font-weight:600;color:#fff;margin:20px 0 10px;display:flex;align-items:center;gap:8px}
+.badge{background:#6366f120;color:#a78bfa;font-size:10px;padding:2px 6px;border-radius:16px}
+.job-card{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:14px;padding:18px;margin-bottom:10px}
+.job-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.job-name{font-weight:600;font-size:14px}
+.job-status{font-size:10px;padding:3px 8px;border-radius:16px}
+.job-status.queued{background:#f59e0b20;color:#fbbf24}
+.job-status.processing{background:#6366f120;color:#a78bfa}
+.job-status.done{background:#10b98120;color:#34d399}
+.job-status.error{background:#ef444420;color:#f87171}
+.step{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #ffffff06}
+.step:last-child{border:none}
+.step-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.step-dot.done{background:#34d399}.step-dot.active{background:#a78bfa;animation:pulse 1.5s infinite}
+.step-dot.pending{background:#333}.step-dot.error{background:#f87171}
+.step-info{flex:1}.step-name{font-size:12px}
+.step.is-done .step-name{color:#34d399}.step.is-active .step-name{color:#c4b5fd}.step.is-pending .step-name{color:#444}
+.step-bar-wrap{height:2px;background:#1a1a2e;border-radius:2px;margin-top:3px}
+.step-bar-fill{height:100%;border-radius:2px;transition:width .5s}
+.step.is-done .step-bar-fill{background:#34d399;width:100%}
+.step.is-active .step-bar-fill{background:linear-gradient(90deg,#6366f1,#a78bfa)}
+.step-time{font-size:9px;color:#666;width:50px;text-align:right}
+.step-pct{font-size:10px;font-weight:600;width:30px;text-align:right;flex-shrink:0}
+.job-actions{display:flex;gap:8px;margin-top:10px;justify-content:center}
+.chart-card{background:linear-gradient(135deg,#12121e,#1a1a2e);border:1px solid #2a2a3e;border-radius:14px;padding:16px;margin-top:16px}
+.chart-card h3{font-size:13px;color:#888;margin-bottom:10px}
+canvas{max-height:140px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+</style>
+</head>
+<body>
+<div class="app">
+<header><h1>SplatMaker</h1><div class="tagline">Video/Photo -> 3D Gaussian Splat | Local Processing</div></header>
+<div class="card">
+  <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <h3>Перетащи видео, фото или папку</h3>
+    <p>.MOV .MP4 .JPG .PNG | Можно несколько файлов и папок</p>
+  </div>
+  <input type="file" id="fileInput" multiple accept=".mov,.mp4,.jpg,.jpeg,.png,.dng" style="display:none">
+  <input type="text" class="path-input" id="pathInput" placeholder="Или введи путь: /Users/dmac/Videos/scan.MOV" onkeydown="if(event.key==='Enter')addPath()">
+  <div class="src-list" id="srcList"></div>
+  <div class="src-summary" id="srcSummary"></div>
+  <div class="settings">
+    <div class="field"><label>Проект</label><input type="text" id="projectName" placeholder="Участок Сириус"></div>
+    <div class="field"><label>Качество</label>
+      <select id="quality">
+        <option value="fast">Быстрый (~15 мин)</option>
+        <option value="medium" selected>Средний (~40 мин)</option>
+        <option value="high">Высокий (~1.5 часа)</option>
+        <option value="ultra">Ультра (~3 часа)</option>
+      </select>
+    </div>
+  </div>
+  <button class="btn btn-primary" id="startBtn" onclick="startJob()" disabled>Запустить обработку</button>
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between">
+  <div class="section-title">Задачи <span class="badge" id="jobCount">0</span></div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span style="color:#64748b;font-size:12px" id="cacheInfo"></span>
+    <button type="button" class="btn btn-sm" style="background:#334155;color:#f87171;font-size:11px;padding:4px 10px" onclick="clearCache()">Очистить кэш</button>
+  </div>
+</div>
+<div id="jobList"></div>
+<div class="chart-card"><h3>Система</h3><canvas id="cpuChart"></canvas></div>
+</div>
+
+<script>
+const VE=[".mov",".mp4",".avi",".mkv",".mts",".m4v"];
+const PE=[".jpg",".jpeg",".png",".dng",".tif",".bmp",".webp"];
+let sources=[];  // {id, type, name, path, frame_every, fps, duration, total_frames}
+
+const dz=document.getElementById("dropzone");
+const sb=document.getElementById("startBtn");
+
+if("Notification" in window && Notification.permission==="default") Notification.requestPermission();
+function notify(t,b){if("Notification" in window && Notification.permission==="granted") new Notification(t,{body:b});}
+
+// Drag & drop
+dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag")});
+dz.addEventListener("dragleave",()=>dz.classList.remove("drag"));
+dz.addEventListener("drop",async e=>{e.preventDefault();dz.classList.remove("drag");
+  const items=e.dataTransfer.items;
+  if(items){const ps=[];for(const it of items){const en=it.webkitGetAsEntry&&it.webkitGetAsEntry();if(en)ps.push(scanE(en))}
+  const files=(await Promise.all(ps)).flat();addBrowserFiles(files)}
+  else addBrowserFiles(e.dataTransfer.files)});
+
+async function scanE(e){if(e.isFile)return new Promise(r=>e.file(f=>r([f])));
+  if(e.isDirectory){const rd=e.createReader();const es=await new Promise(r=>rd.readEntries(e=>r(e)));
+  return(await Promise.all(es.map(x=>scanE(x)))).flat()}return[]}
+
+document.getElementById("fileInput").addEventListener("change",e=>addBrowserFiles(e.target.files));
+
+function addBrowserFiles(files){
+  Array.from(files).forEach(f=>{
+    const ext="."+f.name.split(".").pop().toLowerCase();
+    if(!VE.includes(ext)&&!PE.includes(ext)) return;
+    const isVid=VE.includes(ext);
+    const src={id:"s"+Date.now()+Math.random().toString(36).slice(2,6),
+      type:isVid?"video":"photo", name:f.name, path:"", file:f,
+      frame_every:isVid?6:1, fps:0, duration:0, total_frames:0};
+    sources.push(src);
+    if(isVid) probeFile(src);
+  });
+  renderSources();
+}
+
+function addPath(){
+  const input=document.getElementById("pathInput");
+  const p=input.value.trim();
+  if(!p) return;
+  input.value="";
+  // Try detect existing project
+  detectProject(p);
+  const ext="."+p.split(".").pop().toLowerCase();
+  let stype="folder";
+  if(VE.includes(ext)) stype="video";
+  else if(PE.includes(ext)) stype="photo";
+  const src={id:"s"+Date.now()+Math.random().toString(36).slice(2,6),
+    type:stype, name:p.split("/").pop(), path:p,
+    frame_every:stype==="video"?6:1, fps:0, duration:0, total_frames:0};
+  sources.push(src);
+  if(stype==="video") probePath(src);
+  else if(stype==="folder") scanFolder(src);
+  renderSources();
+}
+
+async function detectProject(path){
+  try{
+    const r=await fetch("/api/detect-progress",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({path})});
+    const d=await r.json();
+    if(d.completed && d.completed.length>0){
+      const steps=d.completed.join(", ");
+      const msg=`Найден проект: ${d.total_images} images\nГотово: ${steps}\nПродолжить с: ${d.resume_from}?`;
+      if(confirm(msg)){
+        // Remove from sources (it's a project, not a source)
+        sources=sources.filter(s=>s.path!==path);
+        renderSources();
+        const quality=document.getElementById("quality").value;
+        const name=document.getElementById("projectName").value||d.name;
+        await fetch("/api/resume",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({path, start_from:d.resume_from, quality, name})});
+      }
+    }
+  }catch(e){}
+}
+
+async function probeFile(src){
+  const fd=new FormData();fd.append("file",src.file);
+  try{const r=await fetch("/api/probe",{method:"POST",body:fd});const d=await r.json();
+    if(d.fps){src.fps=d.fps;src.duration=d.duration;src.total_frames=d.total_frames;
+    src.width=d.width;src.height=d.height;renderSources()}}catch(e){}
+}
+async function probePath(src){
+  try{const r=await fetch("/api/probe",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path:src.path})});const d=await r.json();
+    if(d.fps){src.fps=d.fps;src.duration=d.duration;src.total_frames=d.total_frames;
+    src.width=d.width;src.height=d.height;renderSources()}}catch(e){}
+}
+async function scanFolder(src){
+  try{const r=await fetch("/api/scan-folder",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path:src.path})});const d=await r.json();
+    src.folder_videos=d.videos?.length||0;src.folder_photos=d.photos?.length||0;
+    src.total_files=d.total||0;renderSources()}catch(e){}
+}
+
+function removeSrc(id){sources=sources.filter(s=>s.id!==id);renderSources()}
+function updateFrameEvery(id,val){const s=sources.find(x=>x.id===id);if(s)s.frame_every=parseInt(val);renderSources()}
+
+function renderSources(){
+  const c=document.getElementById("srcList");
+  c.innerHTML=sources.map(s=>{
+    const icon=s.type==="video"?"&#9654;":s.type==="folder"?"&#128193;":"&#128247;";
+    const tag=s.type==="video"?'<span class="src-tag v">Video</span>':
+              s.type==="folder"?'<span class="src-tag f">Folder</span>':'<span class="src-tag p">Photo</span>';
+
+    let meta="";
+    if(s.type==="video"&&s.fps){
+      const extracted=Math.floor(s.total_frames/s.frame_every);
+      meta=`${s.fps}fps, ${s.duration}s, ${s.width}x${s.height} | every ${s.frame_every} = <b style="color:#a78bfa">${extracted} frames</b>`;
+    } else if(s.type==="folder"){
+      meta=s.total_files?`${s.folder_videos||0} video, ${s.folder_photos||0} photo`:s.path;
+    } else if(s.type==="photo"){
+      meta=s.path||s.name;
+    }
+
+    const ctrl=s.type==="video"?`<div class="src-ctrl">
+      <label>Каждый</label>
+      <select onchange="updateFrameEvery('${s.id}',this.value)">
+        ${[1,2,3,4,5,6,10,15,30,60].map(n=>`<option value="${n}" ${s.frame_every===n?"selected":""}>${n}-й</option>`).join("")}
+      </select></div>`:"";
+
+    return `<div class="src-item">${tag}<div class="src-info"><div class="src-name">${s.name}</div>
+      <div class="src-meta">${meta}</div></div>${ctrl}
+      <button class="src-del" onclick="removeSrc('${s.id}')">x</button></div>`;
+  }).join("");
+
+  // Summary
+  const vids=sources.filter(s=>s.type==="video");
+  const phs=sources.filter(s=>s.type==="photo");
+  const flds=sources.filter(s=>s.type==="folder");
+  let totalFrames=0;
+  vids.forEach(s=>{if(s.total_frames)totalFrames+=Math.floor(s.total_frames/s.frame_every)});
+  totalFrames+=phs.length;
+  flds.forEach(s=>totalFrames+=(s.folder_photos||0));
+
+  let sm="";
+  if(vids.length) sm+=`${vids.length} video`;
+  if(phs.length) sm+=(sm?" + ":"")+`${phs.length} photo`;
+  if(flds.length) sm+=(sm?" + ":"")+`${flds.length} folder`;
+  if(totalFrames) sm+=(sm?" = ":"")+"<b>~"+totalFrames+" images</b>";
+  document.getElementById("srcSummary").innerHTML=sm;
+  sb.disabled=sources.length===0;
+}
+
+async function startJob(){
+  if(!sources.length) return;
+  sb.disabled=true;
+
+  // Sources with paths go via JSON API
+  const pathSources=sources.filter(s=>s.path);
+  const fileSources=sources.filter(s=>s.file&&!s.path);
+
+  if(fileSources.length){
+    // Browser uploads: use legacy form upload
+    const fd=new FormData();
+    fileSources.forEach(s=>fd.append("files",s.file));
+    fd.append("quality",document.getElementById("quality").value);
+    fd.append("name",document.getElementById("projectName").value||"Project "+new Date().toLocaleTimeString());
+    fd.append("frame_every",fileSources[0]?.frame_every||6);
+    await fetch("/api/upload",{method:"POST",body:fd});
+  }
+  if(pathSources.length){
+    await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        sources:pathSources.map(s=>({path:s.path,type:s.type,name:s.name,frame_every:s.frame_every})),
+        quality:document.getElementById("quality").value,
+        name:document.getElementById("projectName").value||"Project "+new Date().toLocaleTimeString()
+      })});
+  }
+  sources=[];renderSources();
+}
+
+function fT(s){if(!s||s<0)return"";const m=Math.floor(s/60),ss=Math.floor(s%60);return m?`${m}m${ss}s`:`${ss}s`}
+
+let prevDone={};
+const evs=new EventSource("/api/stream");
+evs.onmessage=e=>{const d=JSON.parse(e.data);renderJobs(d.jobs||[]);
+  (d.jobs||[]).forEach(j=>{if(j.status==="done"&&!prevDone[j.id]){prevDone[j.id]=1;notify("SplatMaker",j.name+" ready!")}})};
+
+function renderJobs(jl){
+  document.getElementById("jobCount").textContent=jl.length;
+  const c=document.getElementById("jobList"),now=Date.now()/1000;
+  c.innerHTML=jl.map(j=>{
+    const steps=j.steps_def||[],ci=steps.findIndex(s=>s.id===j.current_step),st=j.step_times||{};
+    const dt=Object.values(st).filter(t=>t.duration).map(t=>t.duration);
+    const avg=dt.length?dt.reduce((a,b)=>a+b,0)/dt.length:0;
+    const el=j.created?now-j.created:0,rem=Math.max(0,steps.length-1-ci),eta=avg>0?avg*rem:0;
+
+    const sh=steps.map((s,i)=>{
+      let cls="is-pending",dc="pending",p=0;
+      if(i<ci){cls="is-done";dc="done";p=100}else if(i===ci){cls="is-active";dc="active";p=j.step_progress||0}
+      if(j.status==="error"&&i===ci)dc="error";if(j.status==="done"){cls="is-done";dc="done";p=100}
+      let ts="";const t=st[s.id];if(t){const d=t.duration||(t.start?now-t.start:0);
+        ts=t.duration?fT(t.duration):(t.start&&i===ci?fT(d)+"...":"");}
+      return `<div class="step ${cls}"><span class="step-dot ${dc}"></span><div class="step-info"><div class="step-name">${s.name}</div><div class="step-bar-wrap"><div class="step-bar-fill" style="width:${p}%"></div></div></div><span class="step-time">${ts}</span><span class="step-pct">${p}%</span></div>`;
+    }).join("");
+
+    const ti=j.status!=="done"&&j.status!=="error"?
+      `<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:6px;padding:6px 0;border-top:1px solid #ffffff08"><span>Прошло: <b style="color:#a78bfa">${fT(el)}</b></span><span>ETA: <b style="color:#06b6d4">${eta>0?fT(eta):"..."}</b></span></div>`:
+      j.status==="done"?`<div style="font-size:10px;color:#34d399;margin-top:6px;padding:6px 0;border-top:1px solid #ffffff08">Завершено за ${fT(j.finished-j.created)}</div>`:"";
+
+    let acts="";
+    if(j.status==="processing") acts=`<div class="job-actions"><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button><button class="btn btn-sm btn-red" onclick="cancelJob('${j.id}')">Отменить</button></div>`;
+    else if(j.status==="done") acts=`<div class="job-actions"><a href="/viewer/${j.id}" class="btn btn-sm" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff">3D Просмотр</a><a href="/api/job/${j.id}/download" class="btn btn-sm btn-green">Скачать</a><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button></div>`;
+    else if(j.status==="error") acts=`<div class="job-actions"><button class="btn btn-sm" style="background:#334155;color:#94a3b8" onclick="openFolder('${j.id}')">Папка</button></div>`;
+
+    const err=j.error?`<div style="color:#f87171;font-size:11px;margin-top:6px">${j.error}</div>`:"";
+    const warn=j.warning?`<div style="color:#fbbf24;font-size:11px;margin-top:6px">${j.warning}</div>`:"";
+
+    return `<div class="job-card"><div class="job-header"><span class="job-name">${j.name}</span><span class="job-status ${j.status}">${j.status}</span></div>${sh}${ti}${acts}${err}${warn}</div>`;
+  }).join("");
+}
+
+async function cancelJob(id){await fetch(`/api/job/${id}/cancel`,{method:"POST"});updateCacheInfo()}
+async function openFolder(id){await fetch(`/api/job/${id}/open-folder`,{method:"POST"})}
+async function clearCache(){if(!confirm('Удалить все завершённые проекты?'))return;
+  const r=await fetch('/api/clear-cache',{method:'POST'});const d=await r.json();
+  alert('Удалено: '+d.removed);updateCacheInfo()}
+async function updateCacheInfo(){try{const r=await fetch('/api/cache-stats');const d=await r.json();
+  document.getElementById('cacheInfo').textContent=d.size_mb>0?(d.projects+' проектов, '+d.size_mb+' MB'):'Пусто'}catch(e){}}
+updateCacheInfo();setInterval(updateCacheInfo,30000);
+
+const ctx=document.getElementById("cpuChart").getContext("2d");
+const chart=new Chart(ctx,{type:"line",data:{labels:[],datasets:[
+  {label:"CPU",data:[],borderColor:"#8b5cf6",backgroundColor:"rgba(139,92,246,0.1)",fill:true,tension:.3,pointRadius:0},
+  {label:"RAM",data:[],borderColor:"#06b6d4",backgroundColor:"rgba(6,182,212,0.1)",fill:true,tension:.3,pointRadius:0}
+]},options:{responsive:true,animation:false,scales:{x:{display:false},y:{min:0,max:100,grid:{color:"#ffffff08"},ticks:{color:"#555",font:{size:9}}}},plugins:{legend:{labels:{color:"#888",font:{size:10}}}}}});
+setInterval(async()=>{try{const r=await fetch("/api/cpu"),d=await r.json();chart.data.labels=d.map((_,i)=>i);chart.data.datasets[0].data=d.map(x=>x.cpu);chart.data.datasets[1].data=d.map(x=>x.mem);chart.update()}catch(e){}},3000);
+</script>
+</body>
+</html>

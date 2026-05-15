@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Project data
+projects/
+*.ply
+*.tar.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
