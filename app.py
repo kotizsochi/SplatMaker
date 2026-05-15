@@ -3,6 +3,8 @@
 Cloud module preserved in cloud_module.py for future use.
 """
 import json, os, queue, sqlite3, subprocess, threading, time, uuid, shutil, glob, psutil, logging
+import numpy as np
+from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
 log = logging.getLogger('splat')
@@ -33,6 +35,7 @@ QUALITY_PRESETS = {
 STEPS = [
     {"id": "upload",   "name": "Подготовка источников"},
     {"id": "frames",   "name": "Извлечение кадров"},
+    {"id": "blur",     "name": "Фильтр размытия"},
     {"id": "features", "name": "Feature Extraction"},
     {"id": "matching", "name": "Feature Matching"},
     {"id": "mapper",   "name": "3D Реконструкция"},
@@ -41,6 +44,36 @@ STEPS = [
     {"id": "training", "name": "Gaussian Splat Training"},
     {"id": "done",     "name": "Готово!"},
 ]
+
+def calc_blur_score(img_path):
+    """Calculate blur score using Laplacian variance. Higher = sharper."""
+    try:
+        img = Image.open(img_path).convert('L')  # grayscale
+        # Resize for speed (blur detection doesn't need full res)
+        w, h = img.size
+        if w > 800:
+            ratio = 800 / w
+            img = img.resize((800, int(h * ratio)), Image.LANCZOS)
+        arr = np.array(img, dtype=np.float64)
+        # Laplacian kernel
+        laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
+        from scipy.signal import convolve2d
+        filtered = convolve2d(arr, laplacian, mode='same', boundary='symm')
+        return float(np.var(filtered))
+    except:
+        # Fallback without scipy: simple gradient variance
+        try:
+            img = Image.open(img_path).convert('L')
+            w, h = img.size
+            if w > 800:
+                ratio = 800 / w
+                img = img.resize((800, int(h * ratio)), Image.LANCZOS)
+            arr = np.array(img, dtype=np.float64)
+            gx = np.diff(arr, axis=1)
+            gy = np.diff(arr, axis=0)
+            return float(np.var(gx) + np.var(gy))
+        except:
+            return 999999  # keep on error
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -198,7 +231,7 @@ def detect_progress(proj):
         completed.append("training")
 
     # Determine next step
-    step_order = ["frames", "features", "matching", "mapper", "bundle", "undistort", "training", "done"]
+    step_order = ["frames", "blur", "features", "matching", "mapper", "bundle", "undistort", "training", "done"]
     resume_from = "frames"
     for s in step_order:
         if s in completed:
@@ -227,7 +260,7 @@ def process_job(job_id):
     for d in [images_dir, colmap_dir, sparse_dir]:
         os.makedirs(d, exist_ok=True)
 
-    step_order = ["frames", "features", "matching", "mapper", "bundle", "undistort", "training"]
+    step_order = ["frames", "blur", "features", "matching", "mapper", "bundle", "undistort", "training"]
     start_idx = step_order.index(start_from) if start_from in step_order else 0
 
     update_job(job_id, status="processing", current_step="upload", step_progress=100)
@@ -266,6 +299,41 @@ def process_job(job_id):
     if total_images == 0:
         update_job(job_id, status="error", error="Не найдено изображений")
         return
+
+    # Step 1.5: Blur detection
+    if start_idx <= 0:
+        update_job(job_id, current_step="blur", step_progress=0)
+        blur_dir = os.path.join(proj, "blurry")
+        os.makedirs(blur_dir, exist_ok=True)
+        all_imgs = sorted([f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))])
+        scores = []
+        for i, fname in enumerate(all_imgs):
+            fpath = os.path.join(images_dir, fname)
+            score = calc_blur_score(fpath)
+            scores.append((fname, score))
+            if i % 50 == 0:
+                update_job(job_id, step_progress=int(i / max(len(all_imgs), 1) * 80))
+
+        if scores:
+            avg_score = np.mean([s for _, s in scores])
+            threshold = avg_score * 0.3  # 30% of average = blurry
+            removed = 0
+            for fname, score in scores:
+                if score < threshold:
+                    src = os.path.join(images_dir, fname)
+                    dst = os.path.join(blur_dir, fname)
+                    shutil.move(src, dst)
+                    removed += 1
+
+            remaining = total_images - removed
+            log.info(f'[{job_id}] Blur filter: {removed} removed, {remaining} kept (threshold={threshold:.0f}, avg={avg_score:.0f})')
+            update_job(job_id, total_images=remaining, step_progress=100,
+                       blur_removed=removed, blur_threshold=round(threshold))
+            if remaining == 0:
+                update_job(job_id, status="error", error="Все кадры размыты")
+                return
+        else:
+            update_job(job_id, step_progress=100)
 
     # Step 2: Feature Extraction
     if start_idx <= 1:
