@@ -10,6 +10,7 @@ https://github.com/kotizsochi/SplatMaker
 ## Стек
 - **Backend**: Python 3 + Flask (app.py, 1760 строк)
 - **Frontend**: Vanilla HTML/JS/CSS (3 шаблона: index, viewer, compare)
+- **3D Viewer**: PlayCanvas Engine v2.4.1 (GSplatComponent, нативный Gaussian Splat рендеринг)
 - **CLI Tools**: ffmpeg, COLMAP, brush_app (WGPU/Metal)
 - **AI**: rembg[cpu] (AI masking), numpy, PIL
 - **DB**: SQLite (COLMAP internal)
@@ -27,7 +28,7 @@ python3 app.py
 app.py              - Backend (1760 строк, 38 API endpoints)
 templates/
   index.html        - Главный UI (вкладки: Обработка/Проекты/Настройки)
-  viewer.html       - 3D PLY viewer (three.js + OrbitControls)
+  viewer.html       - PlayCanvas Engine GSplat viewer (нативный Gaussian Splat рендеринг)
   compare.html      - Side-by-side comparison viewer
 projects/           - Данные проектов (images, colmap, output.ply)
 telegram.json       - Telegram bot config
@@ -137,8 +138,18 @@ history.json        - История задач
 flask, numpy, Pillow, psutil, rembg[cpu], matplotlib, scipy
 
 ## UI структура (index.html)
-- **Вкладка "Обработка"**: dropzone, sources, settings, jobs, CPU chart
+- **Вкладка "Обработка"**: dropzone, sources, settings, AI masking toggle, jobs, CPU chart
 - **Вкладка "Проекты"**: история с карточками, удаление
 - **Вкладка "Настройки"**: Telegram config, хранилище
 - **Ссылка "Сравнение"**: -> /compare (side-by-side viewer)
-- **Job actions**: 3D просмотр, скачать, очистить PLY, экспорт .splat, видео-отчёт, папка
+- **Job actions**: SuperSplat Editor, 3D просмотр, скачать, очистить PLY, экспорт .splat, видео-отчёт, папка
+
+## 3D Viewer (PlayCanvas Engine)
+- PlayCanvas Engine v2.4.1 CDN (playcanvas.min.js)
+- GSplatComponent: нативный Gaussian Splat рендеринг (не point cloud)
+- WebGPU (если поддерживается) / WebGL fallback
+- Orbit camera: mouse (LMB rotate, RMB pan, scroll zoom) + touch
+- Автоцентровка на модель (AABB)
+- Tone mapping: ACES, Gamma: sRGB
+- Кнопки: Скриншот, Сброс камеры, Сетка, SuperSplat Editor
+- Раньше использовался three.js PLYLoader (только точки), заменён на PlayCanvas
