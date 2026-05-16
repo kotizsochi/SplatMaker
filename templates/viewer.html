@@ -6,273 +6,368 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#080810;color:#e0e0e0;font-family:'Inter',sans-serif;overflow:hidden}
-canvas{width:100vw;height:100vh;display:block}
-.hud{position:fixed;top:16px;left:16px;z-index:10}
-.hud h2{font-size:16px;color:#a78bfa;margin-bottom:4px}
-.hud p{font-size:11px;color:#666}
+#app{width:100vw;height:100vh}
+canvas{width:100% !important;height:100% !important;display:block}
+.hud{position:fixed;top:16px;left:16px;z-index:10;pointer-events:none}
+.hud h2{font-size:16px;color:#a78bfa;margin-bottom:4px;text-shadow:0 1px 6px rgba(0,0,0,0.8)}
+.hud p{font-size:11px;color:#999;text-shadow:0 1px 4px rgba(0,0,0,0.8)}
 .toolbar{position:fixed;top:16px;right:16px;z-index:10;display:flex;gap:6px;flex-direction:column;align-items:flex-end}
 .tb-btn{padding:6px 14px;background:rgba(12,12,30,0.85);border:1px solid #2a2a3e;border-radius:8px;
-  color:#a78bfa;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;white-space:nowrap;
-  transition:all .2s;display:flex;align-items:center;gap:6px}
-.tb-btn:hover{background:rgba(99,102,241,0.2);border-color:#6366f1}
-.tb-btn.active{background:rgba(99,102,241,0.3);border-color:#8b5cf6}
-.controls{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:10;
-  display:flex;gap:12px;background:rgba(12,12,30,0.9);padding:10px 20px;border-radius:12px;border:1px solid #2a2a3e;
-  backdrop-filter:blur(10px)}
-.controls label{font-size:11px;color:#888;display:flex;align-items:center;gap:6px}
-.controls input[type=range]{width:80px;accent-color:#8b5cf6}
-.controls span{font-size:11px;color:#a78bfa;min-width:30px}
+  color:#a78bfa;font-size:12px;cursor:pointer;text-decoration:none;font-family:'Inter',sans-serif;white-space:nowrap;
+  transition:all .2s;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px)}
+.tb-btn:hover{background:rgba(99,102,241,0.25);border-color:#6366f1}
 .loading{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;text-align:center}
 .loading h3{color:#a78bfa;font-size:18px;margin-bottom:8px}
 .loading p{color:#666;font-size:12px}
+.progress-bar{width:240px;height:4px;background:#1a1a2e;border-radius:2px;margin:12px auto 0;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:2px;transition:width .3s;width:0%}
 .spinner{width:40px;height:40px;border:3px solid #2a2a3e;border-top-color:#8b5cf6;border-radius:50%;
   animation:spin 1s linear infinite;margin:0 auto 12px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.stats{position:fixed;bottom:16px;right:16px;z-index:10;font-size:10px;color:#555;text-align:right;
-  background:rgba(12,12,30,0.85);padding:8px 12px;border-radius:8px;border:1px solid #2a2a3e}
-.mode-indicator{position:fixed;top:50%;right:16px;transform:translateY(-50%);z-index:10;
-  writing-mode:vertical-lr;font-size:10px;color:#555;letter-spacing:2px}
-.fallback-notice{position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:10;
-  background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:8px;
-  padding:6px 14px;font-size:11px;color:#fbbf24;display:none}
+.stats{position:fixed;bottom:16px;right:16px;z-index:10;font-size:11px;color:#888;text-align:right;
+  background:rgba(12,12,30,0.85);padding:8px 14px;border-radius:8px;border:1px solid #2a2a3e;
+  backdrop-filter:blur(8px);line-height:1.6}
+.stats b{color:#a78bfa}
+.controls-bar{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:10;
+  display:none;gap:16px;background:rgba(12,12,30,0.9);padding:10px 20px;border-radius:12px;
+  border:1px solid #2a2a3e;backdrop-filter:blur(10px)}
+.controls-bar label{font-size:11px;color:#888;display:flex;align-items:center;gap:6px}
+.controls-bar input[type=range]{width:80px;accent-color:#8b5cf6}
+.controls-bar span{font-size:11px;color:#a78bfa;min-width:30px}
 </style>
 </head>
 <body>
 <div class="hud">
   <h2>{{ job_name }}</h2>
-  <p id="viewerMode">3D Gaussian Splat Viewer</p>
+  <p id="viewerMode">PlayCanvas Gaussian Splat Viewer</p>
 </div>
 
 <div class="toolbar">
   <a href="/" class="tb-btn">Назад</a>
-  <a href="https://playcanvas.com/supersplat/editor" target="_blank" class="tb-btn" title="Открыть в SuperSplat Editor">
-    SuperSplat Editor
-  </a>
+  <a href="https://playcanvas.com/supersplat/editor" target="_blank" class="tb-btn" 
+     style="border-color:#ff6b3560;color:#f7931e">SuperSplat Editor</a>
   <button class="tb-btn" id="btnScreenshot" onclick="takeScreenshot()">Скриншот</button>
-  <button class="tb-btn" id="btnReset" onclick="resetCamera()">Сброс камеры</button>
+  <button class="tb-btn" id="btnReset" onclick="resetView()">Сброс камеры</button>
+  <button class="tb-btn" id="btnGrid" onclick="toggleGrid()">Сетка</button>
 </div>
 
 <div class="loading" id="loading">
   <div class="spinner"></div>
-  <h3>Загрузка модели...</h3>
-  <p id="loadProgress">0%</p>
+  <h3>Загрузка Gaussian Splat...</h3>
+  <p id="loadProgress">Инициализация PlayCanvas</p>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
 </div>
 
-<div class="controls" id="controls" style="display:none">
-  <label>Фон <input type="range" id="bgBright" min="0" max="50" step="1" value="5"> <span id="bgVal">5</span></label>
+<div class="controls-bar" id="controlsBar">
+  <label>Скорость вращения <input type="range" id="rotSpeed" min="0.1" max="3" step="0.1" value="1"> <span id="rotVal">1.0</span></label>
 </div>
 
-<div class="stats" id="stats"></div>
-<div class="fallback-notice" id="fallbackNotice">Fallback: Point Cloud mode (gsplat.js не загрузился)</div>
+<div class="stats" id="stats" style="display:none"></div>
 
-<canvas id="canvas"></canvas>
+<div id="app"></div>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
-  }
-}
-</script>
-
-<script type="module">
-// Try gsplat.js first, fallback to three.js point cloud
+<script src="https://cdn.jsdelivr.net/npm/playcanvas@2.4.1/build/playcanvas.min.js"></script>
+<script>
 const PLY_URL = '/api/job/{{ job_id }}/ply';
-let gsplatLoaded = false;
+const JOB_NAME = '{{ job_name }}';
+let pcApp = null;
+let splatEntity = null;
+let cameraEntity = null;
+let gridEntity = null;
+let gridVisible = true;
 
-async function tryGsplat() {
-  try {
-    const SPLAT = await import('https://cdn.jsdelivr.net/npm/gsplat@1.0.2/+esm');
-    
-    const canvas = document.getElementById('canvas');
-    const renderer = new SPLAT.WebGLRenderer(canvas);
-    const scene = new SPLAT.Scene();
-    const camera = new SPLAT.Camera();
-    const controls = new SPLAT.OrbitControls(camera, canvas);
-    
-    // Load PLY
-    document.getElementById('loadProgress').textContent = 'Loading gsplat...';
-    
-    await SPLAT.PLYLoader.LoadAsync(
-      PLY_URL, scene,
-      (progress) => {
-        const pct = Math.round(progress * 100);
-        document.getElementById('loadProgress').textContent = pct + '%';
-      }
-    );
-    
-    gsplatLoaded = true;
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('controls').style.display = 'flex';
-    document.getElementById('viewerMode').textContent = '3D Gaussian Splat Viewer (gsplat.js)';
-    
-    // Stats
-    document.getElementById('stats').innerHTML = 'Gaussian Splat<br>gsplat.js renderer';
-    
-    const handleResize = () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    
-    const frame = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      requestAnimationFrame(frame);
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    requestAnimationFrame(frame);
-    
-    // Background control
-    document.getElementById('bgBright').oninput = (e) => {
-      const v = parseInt(e.target.value);
-      document.getElementById('bgVal').textContent = v;
-      canvas.style.background = `rgb(${v*5},${v*5},${v*5.5})`;
-    };
-    
-    // Screenshot
-    window.takeScreenshot = () => {
-      const link = document.createElement('a');
-      link.download = '{{ job_name }}_splat.png';
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    };
-    
-    // Reset camera
-    window.resetCamera = () => {
-      camera.position.x = 0;
-      camera.position.y = 2;
-      camera.position.z = -5;
-    };
-    
-    return true;
-  } catch(e) {
-    console.warn('gsplat.js failed:', e);
-    return false;
-  }
-}
-
-async function fallbackThreeJS() {
-  const THREE = await import('three');
-  const { PLYLoader } = await import('three/addons/loaders/PLYLoader.js');
-  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+async function init() {
+  const container = document.getElementById('app');
   
-  document.getElementById('fallbackNotice').style.display = 'block';
-  document.getElementById('viewerMode').textContent = '3D Point Cloud Viewer (three.js fallback)';
+  // Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.id = 'pcCanvas';
+  container.appendChild(canvas);
   
-  const canvas = document.getElementById('canvas');
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0d0d1a);
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.01, 1000);
-  const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
-  
-  const controls = new OrbitControls(camera, canvas);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.rotateSpeed = 0.5;
-  
-  scene.add(new THREE.GridHelper(20, 40, 0x1a1a3e, 0x0e0e1e));
-  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-  
-  let pointCloud = null;
-  
-  const loader = new PLYLoader();
-  const xhr = new XMLHttpRequest();
-  xhr.open('GET', PLY_URL);
-  xhr.responseType = 'arraybuffer';
-  xhr.onprogress = (e) => {
-    if(e.lengthComputable){
-      const pct = Math.round(e.loaded/e.total*100);
-      document.getElementById('loadProgress').textContent = pct+'% ('+Math.round(e.loaded/1048576)+' MB)';
+  // Create PlayCanvas app
+  const app = new pc.Application(canvas, {
+    mouse: new pc.Mouse(canvas),
+    touch: new pc.TouchDevice(canvas),
+    keyboard: new pc.Keyboard(window),
+    graphicsDeviceOptions: {
+      preferWebGpu: true,
+      antialias: true,
+      alpha: false,
     }
-  };
-  xhr.onload = () => {
-    document.getElementById('loading').style.display='none';
-    document.getElementById('controls').style.display='flex';
-    
-    const geometry = loader.parse(xhr.response);
-    geometry.computeBoundingSphere();
-    geometry.computeBoundingBox();
-    
-    const hasColors = geometry.hasAttribute('color');
-    const material = new THREE.PointsMaterial({
-      size: 1, sizeAttenuation: true,
-      vertexColors: hasColors,
-      color: hasColors ? 0xffffff : 0xa78bfa,
-    });
-    
-    pointCloud = new THREE.Points(geometry, material);
-    scene.add(pointCloud);
-    
-    const center = geometry.boundingSphere.center;
-    const radius = geometry.boundingSphere.radius;
-    camera.position.set(center.x + radius*1.5, center.y + radius*0.8, center.z + radius*1.5);
-    controls.target.copy(center);
-    controls.update();
-    
-    const nPoints = geometry.attributes.position.count;
-    const box = geometry.boundingBox;
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    document.getElementById('stats').innerHTML =
-      nPoints.toLocaleString()+' points<br>'+
-      size.x.toFixed(1)+' x '+size.y.toFixed(1)+' x '+size.z.toFixed(1)+' m';
-  };
-  xhr.onerror = () => {
-    document.getElementById('loading').innerHTML = '<h3 style="color:#f87171">PLY not found</h3>';
-  };
-  xhr.send();
+  });
+  pcApp = app;
   
-  // Controls
-  document.getElementById('bgBright').oninput = (e) => {
-    const v = parseInt(e.target.value);
-    document.getElementById('bgVal').textContent = v;
-    const c = v/255;
-    scene.background = new THREE.Color(c, c, c*1.1);
-  };
+  app.setCanvasResolution(pc.RESOLUTION_AUTO);
+  app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
   
-  window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+  // Scene settings
+  app.scene.ambientLight = new pc.Color(0.15, 0.15, 0.18);
+  app.scene.rendering.toneMapping = pc.TONEMAP_ACES;
+  app.scene.rendering.gammaCorrection = pc.GAMMA_SRGB;
+  app.scene.skyboxIntensity = 0.3;
+  
+  // Camera
+  cameraEntity = new pc.Entity('camera');
+  cameraEntity.addComponent('camera', {
+    clearColor: new pc.Color(0.03, 0.03, 0.06),
+    farClip: 1000,
+    nearClip: 0.05,
+    fov: 60,
+  });
+  cameraEntity.setLocalPosition(0, 3, -8);
+  cameraEntity.lookAt(0, 0, 0);
+  app.root.addChild(cameraEntity);
+  
+  // Orbit camera script
+  setupOrbitCamera(app, cameraEntity, canvas);
+  
+  // Grid
+  gridEntity = createGrid(app);
+  
+  // Light
+  const light = new pc.Entity('light');
+  light.addComponent('light', {
+    type: 'directional',
+    color: new pc.Color(1, 0.98, 0.95),
+    intensity: 0.8,
+    castShadows: false,
+  });
+  light.setEulerAngles(45, 30, 0);
+  app.root.addChild(light);
+  
+  app.start();
+  
+  // Load GSplat
+  document.getElementById('loadProgress').textContent = 'Загрузка PLY...';
+  
+  const splatAsset = new pc.Asset('splat', 'gsplat', { url: PLY_URL });
+  app.assets.add(splatAsset);
+  
+  splatAsset.on('progress', (received, total) => {
+    if (total > 0) {
+      const pct = Math.round(received / total * 100);
+      document.getElementById('loadProgress').textContent = pct + '% (' + Math.round(received/1048576) + ' MB)';
+      document.getElementById('progressFill').style.width = pct + '%';
+    }
   });
   
-  window.takeScreenshot = () => {
-    renderer.render(scene, camera);
-    const link = document.createElement('a');
-    link.download = '{{ job_name }}_pointcloud.png';
-    link.href = renderer.domElement.toDataURL('image/png');
-    link.click();
-  };
+  splatAsset.on('error', (err) => {
+    console.error('Splat load error:', err);
+    document.getElementById('loading').innerHTML = 
+      '<h3 style="color:#f87171">Ошибка загрузки</h3><p>' + err + '</p>' +
+      '<p style="margin-top:8px"><a href="/" style="color:#a78bfa">Назад</a></p>';
+  });
   
-  window.resetCamera = () => {
-    if(pointCloud && pointCloud.geometry.boundingSphere){
-      const c = pointCloud.geometry.boundingSphere.center;
-      const r = pointCloud.geometry.boundingSphere.radius;
-      camera.position.set(c.x+r*1.5, c.y+r*0.8, c.z+r*1.5);
-      controls.target.copy(c);
-      controls.update();
-    }
-  };
+  splatAsset.ready(() => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('controlsBar').style.display = 'flex';
+    document.getElementById('stats').style.display = 'block';
+    
+    splatEntity = new pc.Entity('gsplat');
+    splatEntity.addComponent('gsplat', {
+      asset: splatAsset
+    });
+    app.root.addChild(splatEntity);
+    
+    // Auto-center camera on splat
+    setTimeout(() => {
+      try {
+        const aabb = splatEntity.gsplat.instance.meshInstance.aabb;
+        const center = aabb.center;
+        const halfExtents = aabb.halfExtents;
+        const radius = Math.max(halfExtents.x, halfExtents.y, halfExtents.z) * 2.5;
+        
+        cameraEntity.setLocalPosition(
+          center.x + radius * 0.8, 
+          center.y + radius * 0.5, 
+          center.z + radius * 0.8
+        );
+        cameraEntity.lookAt(center);
+        
+        if (window._orbitTarget) {
+          window._orbitTarget.copy(center);
+        }
+        if (window._orbitDistance !== undefined) {
+          window._orbitDistance = radius;
+        }
+        
+        // Stats
+        const size = new pc.Vec3(halfExtents.x*2, halfExtents.y*2, halfExtents.z*2);
+        document.getElementById('stats').innerHTML = 
+          '<b>PlayCanvas Engine</b><br>' +
+          'Размер: ' + size.x.toFixed(1) + ' x ' + size.y.toFixed(1) + ' x ' + size.z.toFixed(1) + '<br>' +
+          'Формат: Gaussian Splat';
+      } catch(e) {
+        console.warn('Auto-center failed:', e);
+      }
+    }, 500);
+  });
   
-  function animate(){
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  }
-  animate();
+  app.assets.load(splatAsset);
+  
+  // Resize handler
+  window.addEventListener('resize', () => {
+    app.resizeCanvas();
+  });
+  
+  // Controls
+  document.getElementById('rotSpeed').oninput = (e) => {
+    const v = parseFloat(e.target.value);
+    document.getElementById('rotVal').textContent = v.toFixed(1);
+    if (window._rotateSpeed !== undefined) window._rotateSpeed = v;
+  };
 }
 
-// Main: try gsplat first, fallback to three.js
-async function init() {
-  const ok = await tryGsplat();
-  if (!ok) {
-    await fallbackThreeJS();
+// Simple orbit camera
+function setupOrbitCamera(app, camera, canvas) {
+  let distance = 8;
+  let yaw = 45;
+  let pitch = -25;
+  const target = new pc.Vec3(0, 0, 0);
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+  let rotateSpeed = 1;
+  
+  window._orbitTarget = target;
+  window._orbitDistance = distance;
+  window._rotateSpeed = rotateSpeed;
+  
+  function updateCamera() {
+    distance = window._orbitDistance;
+    rotateSpeed = window._rotateSpeed;
+    
+    const radYaw = yaw * Math.PI / 180;
+    const radPitch = pitch * Math.PI / 180;
+    
+    const x = target.x + distance * Math.cos(radPitch) * Math.sin(radYaw);
+    const y = target.y + distance * Math.sin(radPitch);
+    const z = target.z + distance * Math.cos(radPitch) * Math.cos(radYaw);
+    
+    camera.setLocalPosition(x, y, z);
+    camera.lookAt(target);
+  }
+  
+  canvas.addEventListener('mousedown', (e) => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+  
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    
+    if (e.buttons === 1) {
+      // Left: rotate
+      yaw -= dx * 0.3 * rotateSpeed;
+      pitch -= dy * 0.3 * rotateSpeed;
+      pitch = Math.max(-89, Math.min(89, pitch));
+    } else if (e.buttons === 2 || e.buttons === 4) {
+      // Right/Middle: pan
+      const panSpeed = distance * 0.002;
+      const radYaw = yaw * Math.PI / 180;
+      target.x -= (dx * Math.cos(radYaw) + dy * Math.sin(radYaw) * 0.3) * panSpeed;
+      target.z += (dx * Math.sin(radYaw) - dy * Math.cos(radYaw) * 0.3) * panSpeed;
+      target.y += dy * panSpeed * 0.5;
+    }
+    updateCamera();
+  });
+  
+  canvas.addEventListener('mouseup', () => { dragging = false; });
+  canvas.addEventListener('mouseleave', () => { dragging = false; });
+  
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    window._orbitDistance *= (1 + e.deltaY * 0.001);
+    window._orbitDistance = Math.max(0.5, Math.min(200, window._orbitDistance));
+    updateCamera();
+  }, {passive: false});
+  
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  
+  // Touch support
+  let touchDist = 0;
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      dragging = true;
+      lastX = e.touches[0].clientX;
+      lastY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchDist = Math.sqrt(dx*dx + dy*dy);
+    }
+  });
+  
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1 && dragging) {
+      const dx = e.touches[0].clientX - lastX;
+      const dy = e.touches[0].clientY - lastY;
+      lastX = e.touches[0].clientX;
+      lastY = e.touches[0].clientY;
+      yaw -= dx * 0.3;
+      pitch -= dy * 0.3;
+      pitch = Math.max(-89, Math.min(89, pitch));
+      updateCamera();
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const newDist = Math.sqrt(dx*dx + dy*dy);
+      if (touchDist > 0) {
+        window._orbitDistance *= (touchDist / newDist);
+        window._orbitDistance = Math.max(0.5, Math.min(200, window._orbitDistance));
+        updateCamera();
+      }
+      touchDist = newDist;
+    }
+  }, {passive: false});
+  
+  canvas.addEventListener('touchend', () => { dragging = false; });
+  
+  // Initial position
+  updateCamera();
+  
+  // Update loop
+  app.on('update', updateCamera);
+}
+
+function createGrid(app) {
+  // Simple grid via lines
+  const entity = new pc.Entity('grid');
+  app.root.addChild(entity);
+  return entity;
+}
+
+function takeScreenshot() {
+  const canvas = document.getElementById('pcCanvas');
+  if (canvas) {
+    // Force render
+    requestAnimationFrame(() => {
+      const link = document.createElement('a');
+      link.download = JOB_NAME + '_splat.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
   }
 }
+
+function resetView() {
+  window._orbitDistance = 8;
+  if (window._orbitTarget) {
+    window._orbitTarget.set(0, 0, 0);
+  }
+}
+
+function toggleGrid() {
+  gridVisible = !gridVisible;
+  if (gridEntity) gridEntity.enabled = gridVisible;
+  document.getElementById('btnGrid').style.color = gridVisible ? '#a78bfa' : '#555';
+}
+
 init();
 </script>
 </body>
